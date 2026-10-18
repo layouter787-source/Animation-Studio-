@@ -1203,3 +1203,12 @@ As bibliotecas são opções a avaliar, não dependências automaticamente aprov
 # 29. Regra final do produto
 
 **O Animation Studio deve ser um estúdio de animação 2D completo, não um protótipo.** A folha branca é o espaço de criação; o espaço exterior é escuro; as barras superior e de ferramentas são móveis, flutuantes e ocultáveis. Elas nunca devem tornar-se molduras fixas que roubem permanentemente área ao canvas. Os frames, camadas, cenários, ferramentas, reprodução, gravação e exportação devem operar sobre dados reais e persistentes. Uma funcionalidade só pode ser declarada pronta depois de implementada, testada e validada.
+
+
+## Especificação técnica aprofundada do canvas e da câmara
+
+Foi criado um documento complementar com os requisitos e a análise de referência para zoom, pan, rotação visual do canvas, transformação de coordenadas, arbitragem de gestos, câmara e pipeline de exportação, incluindo ligações ao código e à documentação oficial do OpenToonz:
+
+- [Especificação técnica — Canvas, Zoom, Pan, Rotação e Câmara](docs/ESPECIFICACAO_CANVAS_ZOOM_PAN_ROTACAO_CAMERA.md)
+
+Este documento é uma análise técnica de referência e não significa que estas funcionalidades já estejam implementadas. Qualquer reutilização de código OpenToonz exige auditoria do ficheiro, dependências e licença aplicável.
