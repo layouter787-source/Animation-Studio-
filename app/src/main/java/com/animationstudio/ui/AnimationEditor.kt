@@ -12,10 +12,12 @@ import androidx.compose.foundation.gestures.calculateRotation
 import androidx.compose.foundation.gestures.calculateZoom
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.offset
@@ -349,7 +351,7 @@ fun AnimationEditor(projectName: String, initialFps: Int, sheetWidth: Int, sheet
             }
 
             FloatingBar(timelinePos, { timelinePos = it }, viewSize, vertical = false) {
-                LazyRow(Modifier.width(containerW - 64.dp).height(52.dp), horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(4.dp)) {
+                LazyRow(Modifier.width(containerW - 64.dp).height(52.dp), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                     itemsIndexed(st.timeline.frames, key = { _, f -> f.id }) { i, _ ->
                         val selected = i == st.timeline.current
                         Box(
@@ -395,7 +397,9 @@ private fun FloatingBar(
                     change.consume()
                     val mx = (curContainer.width - curSize.width).coerceAtLeast(0).toFloat()
                     val my = (curContainer.height - curSize.height).coerceAtLeast(0).toFloat()
-                    val n = curOffset + drag
+                    // Parte da posição realmente mostrada (já limitada ao ecrã), não da guardada.
+                    val base = Offset(curOffset.x.coerceIn(0f, mx), curOffset.y.coerceIn(0f, my))
+                    val n = base + drag
                     curOnOffset(Offset(n.x.coerceIn(0f, mx), n.y.coerceIn(0f, my)))
                 }
             }
@@ -438,13 +442,13 @@ private fun ColorDialog(initial: Int, onCancel: () -> Unit, onConfirm: (Int) -> 
         title = { Text("Cor (RGB)", color = StudioColors.Ink) },
         text = {
             Column {
-                Box(Modifier.fillMaxSize().height(40.dp).background(Color(argb), RoundedCornerShape(6.dp)))
+                Box(Modifier.fillMaxWidth().height(40.dp).background(Color(argb), RoundedCornerShape(6.dp)))
                 Text("R ${r.roundToInt()}", color = StudioColors.Ink, fontSize = 12.sp)
-                Slider(r, { r = it }, valueRange = 0f..255f)
+                Slider(value = r, onValueChange = { r = it }, valueRange = 0f..255f)
                 Text("G ${g.roundToInt()}", color = StudioColors.Ink, fontSize = 12.sp)
-                Slider(g, { g = it }, valueRange = 0f..255f)
+                Slider(value = g, onValueChange = { g = it }, valueRange = 0f..255f)
                 Text("B ${b.roundToInt()}", color = StudioColors.Ink, fontSize = 12.sp)
-                Slider(b, { b = it }, valueRange = 0f..255f)
+                Slider(value = b, onValueChange = { b = it }, valueRange = 0f..255f)
             }
         },
         confirmButton = { Button(onClick = { onConfirm(argb) }) { Text("OK") } },
