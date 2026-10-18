@@ -1,603 +1,1205 @@
-# Animation Studio para Android
-## Especificação funcional e técnica completa
+# Animation Studio — Especificação integral do produto
 
-> **Documento principal de requisitos do produto.** Esta especificação define a visão, os comportamentos esperados, a arquitetura e os critérios de aceitação do Animation Studio. As funcionalidades descritas são requisitos do produto; não significa que já estejam todas implementadas. O estado real de cada funcionalidade deve ser atualizado à medida que for construída e testada.
+**Documento:** Especificação de produto, experiência, comportamento, arquitetura, qualidade e aceitação  
+**Plataforma principal:** Android (telemóveis e tablets)  
+**Estado do documento:** Requisitos-alvo para produto completo de produção  
+**Idioma-base da especificação:** Português  
+**Repositório:** https://github.com/layouter787-source/Animation-Studio-
 
----
-
-## 1. Visão do produto
-
-O **Animation Studio** é um estúdio de desenho e animação 2D frame a frame, pensado prioritariamente para telemóveis e tablets Android. O fluxo de trabalho inspira-se em aplicações como RoughAnimator e FlipaClip, mas o produto terá implementação, identidade visual e evolução próprias.
-
-A prioridade central é permitir que o artista tenha **o máximo de espaço útil para desenhar**, com controlos acessíveis e personalizáveis que não ocupem permanentemente uma faixa da área de trabalho.
-
-### Princípios fundamentais
-
-1. O espaço de trabalho pertence ao artista: as barras são móveis, flutuantes e ocultáveis.
-2. A folha de desenho é **branca por padrão**, enquanto o espaço à volta dela é escuro.
-3. Zoom, deslocamento e rotação da vista não alteram as dimensões nem a resolução real do projeto.
-4. Os desenhos de cada frame são independentes e mantêm-se sincronizados com as camadas e a timeline.
-5. Operações destrutivas devem poder ser desfeitas quando tecnicamente aplicável.
-6. O projeto deve guardar e recuperar o trabalho sem depender de uma ligação à Internet.
-7. A interface deve adaptar-se a telemóveis, tablets, orientação horizontal/vertical e diferentes tamanhos de ecrã.
-8. A experiência deve ser fluida, sem prometer desempenho que não tenha sido medido em dispositivos reais.
+> **Importante — estado e verdade do produto:** este documento define o que o Animation Studio deverá oferecer quando o produto estiver completo. Não afirma que todas as funcionalidades já estejam implementadas. Cada requisito só poderá ser marcado como concluído depois de existir código integrado, testes e validação em dispositivos. A existência de um APK compilável não equivale a um estúdio de animação completo.
 
 ---
 
-## 2. A regra mais importante da interface: barras flutuantes
+# 1. Visão, missão e posicionamento
 
-### 2.1 Área de trabalho de ecrã inteiro
+O **Animation Studio** é um estúdio de desenho e animação 2D, prioritariamente para Android, com fluxo de trabalho centrado em animação frame a frame, desenho direto sobre uma folha branca, gestão temporal por timeline e uma interface que se adapta à forma como cada artista trabalha.
 
-A área do editor deve ocupar todo o espaço disponível da aplicação. A folha branca, as barras e os painéis são elementos apresentados **sobre** essa área de trabalho.
+A experiência de edição inspira-se em fluxos de trabalho de aplicações como RoughAnimator e FlipaClip, mas o Animation Studio deve ter implementação, identidade visual, código, arquitetura e evolução próprios. As aplicações de referência servem para estudar padrões de interação, não para copiar código, marcas, recursos gráficos ou componentes proprietários.
 
-**Não reservar permanentemente uma coluna para a barra de ferramentas nem uma faixa para a barra superior.** Quando uma barra está flutuante, a área de desenho continua por baixo dela. O utilizador pode desenhar na parte visível da folha sem a interface reduzir o espaço do canvas.
+## 1.1 Missão
 
-Este comportamento é essencial: as barras não devem empurrar o canvas para o lado nem encolher a folha só por estarem visíveis.
+Permitir que um artista consiga criar, organizar, rever, animar e exportar projetos 2D completos diretamente num dispositivo Android, com controlos que possam ser reorganizados para deixar o máximo de espaço possível para desenhar.
 
-### 2.2 Barra superior móvel
+## 1.2 Princípios que não podem ser quebrados
 
-A barra superior contém os controlos principais do projeto, incluindo, conforme o modo e o espaço disponível:
-- Menu do projeto.
-- Duração/intervalo de desenho e controlos de frame.
+1. **A folha é branca por padrão.** O espaço exterior à folha é escuro. A folha é um objeto com dimensões e limites próprios, não apenas uma região escura ou o fundo inteiro da aplicação.
+2. **O canvas não perde espaço para barras fixas.** A barra superior e a barra de ferramentas flutuam sobre a área de trabalho, podem ser movidas e ocultadas e não reservam permanentemente faixas ou colunas.
+3. **A navegação visual não altera a arte.** Zoom, pan e rotação da vista não alteram a resolução, as coordenadas internas, os frames nem o enquadramento de exportação.
+4. **Os dados são reais e persistentes.** Frames, camadas, cenários, cores, tempos e projetos não podem ser apenas elementos decorativos de interface ou dados fictícios.
+5. **O editor funciona offline.** Desenhar, guardar, abrir e reproduzir projetos locais não deve exigir conta ou ligação à Internet.
+6. **A interface não pode bloquear durante operações longas.** Importação, composição, geração de miniaturas e exportação devem usar trabalho assíncrono e informar o estado.
+7. **A edição deve ser recuperável.** Autosave, recuperação após falha e desfazer/refazer são partes essenciais da experiência.
+8. **A performance deve ser medida.** Não afirmar que uma API gráfica ou linguagem é sempre mais rápida; medir em dispositivos e projetos reais.
+9. **A interface respeita os esboços fornecidos.** Melhorar a clareza e a qualidade visual não autoriza alterar silenciosamente a estrutura central escolhida pelo autor.
+10. **Uma função não é considerada concluída só porque existe um botão.** Cada comando deve executar uma operação real, atualizar o estado persistente e ter tratamento de erro e testes.
+
+## 1.3 Público-alvo
+
+- Animadores 2D iniciantes e experientes.
+- Ilustradores que criam animação frame a frame.
+- Estudantes de desenho, movimento e princípios de animação.
+- Artistas que trabalham em telemóveis ou tablets Android, com toque ou stylus.
+- Criadores que precisam de exportar sequências de imagens ou vídeos para outras ferramentas.
+
+## 1.4 O que o produto não deve ser
+
+- Não deve ser apenas um protótipo de interface.
+- Não deve ser uma galeria de ecrãs sem ferramentas funcionais.
+- Não deve simular a gravação, a reprodução ou a exportação.
+- Não deve depender de um serviço remoto para tarefas básicas de desenho.
+- Não deve declarar suporte universal para stylus, GPU, formatos ou resoluções sem testes.
+- Não deve incluir funcionalidades futuras como se já estivessem prontas.
+
+---
+
+# 2. Plataforma, compatibilidade e experiência do dispositivo
+
+## 2.1 Plataforma
+
+- Aplicação Android nativa.
+- Kotlin para a camada de aplicação e interface.
+- Jetpack Compose e Material 3 para a interface.
+- C++/Android NDK para componentes de motor que beneficiem de processamento nativo.
+- JNI para uma fronteira explícita entre Kotlin e C++.
+- CMake para configurar e compilar o código C++.
+- GitHub Actions para compilação automatizada e artefactos de teste.
+- Armazenamento local como caminho principal dos projetos.
+
+A versão mínima de Android e as arquiteturas ABI suportadas devem ser definidas no Gradle e testadas no processo de lançamento; não podem ficar implícitas.
+
+## 2.2 Formatos de dispositivo
+
+O editor deve suportar:
+- Telemóveis em orientação vertical.
+- Telemóveis em orientação horizontal.
+- Tablets, incluindo áreas de trabalho amplas.
+- Mudança de orientação sem perder o projeto ou a ferramenta ativa.
+- Recortes de ecrã, barras de sistema e áreas seguras.
+- Dispositivos apenas táteis e dispositivos com stylus, quando disponível.
+
+A interface pode ajustar a posição inicial das barras à orientação, mas o utilizador continua a poder movê-las. A adaptação automática nunca deve reintroduzir uma coluna fixa ou uma faixa permanente que reduza a folha.
+
+## 2.3 Toque, stylus e entrada
+
+- Aceitar entrada de dedo.
+- Usar pressão e propriedades de stylus apenas quando o dispositivo e a API as disponibilizarem.
+- Não assumir que todos os dispositivos têm pressão, inclinação, botão de stylus ou rejeição de palma.
+- Distinguir entrada de desenho de gestos de navegação e de interação com a interface.
+- Prevenir que um toque em botão, pega ou painel inicie um traço acidental.
+- Disponibilizar alvos de toque suficientemente grandes e opção de aumentar a escala da interface.
+
+---
+
+# 3. Modelo da área de trabalho e folha de desenho
+
+## 3.1 Conceitos visuais distintos
+
+A implementação deve distinguir claramente:
+
+- **Área de trabalho (workspace):** superfície visual do editor, com fundo escuro.
+- **Folha/canvas:** retângulo branco por padrão, com largura e altura definidas no projeto.
+- **Conteúdo artístico:** traços, imagens, formas, fundos e outros dados pertencentes ao projeto.
+- **Câmara:** enquadramento usado para pré-visualização e exportação; não é a navegação da vista.
+- **Interface flutuante:** barras, painéis, indicadores e menus desenhados por cima da área de trabalho.
+
+A folha pode ocupar uma parte ou ultrapassar a área visível conforme o zoom. O espaço exterior à folha continua visualmente distinto.
+
+## 3.2 Transformação de coordenadas
+
+O motor deve manter coordenadas internas do projeto independentes das coordenadas do ecrã. A conversão entre espaço do ecrã e espaço do projeto deve ter em conta:
+- Escala/zoom da vista.
+- Deslocamento/pan.
+- Rotação da vista, se ativada.
+- Origem e dimensões da folha.
+- Densidade e escala da interface.
+
+A conversão deve ser centralizada numa implementação testável. Ferramentas de desenho, laço, balde, seleção, câmara e gestos não devem criar sistemas incompatíveis de coordenadas.
+
+## 3.3 Zoom, pan e rotação da vista
+
+- Pinça com dois dedos para aproximar e afastar.
+- Gesto de dois dedos para deslocar a vista, sem alterar os desenhos.
+- Ferramenta de mão ou comando equivalente para navegação precisa.
+- Comando “Ajustar à folha” para enquadrar a folha visível.
+- Indicador de zoom e, quando aplicável, rotação da vista.
+- Limites de zoom definidos para evitar perda de orientação ou instabilidade numérica.
+- Possibilidade de centrar a folha.
+- A folha pode ficar parcialmente fora do ecrã quando ampliada.
+- A vista pode ser movida mesmo quando a folha é maior que o ecrã.
+- Os gestos de vista não podem ser confundidos com o desenho de um traço.
+
+A rotação da vista, caso disponibilizada, é apenas uma transformação de visualização. A rotação da câmara é uma propriedade de enquadramento distinta.
+
+## 3.4 Dimensões do projeto
+
+No diálogo de criação, o utilizador deve poder definir:
+- Nome.
+- Largura e altura em píxeis.
+- FPS inicial.
+- Predefinição de proporção/tamanho, se desejado.
+- Opções de câmara/enquadramento inicial, quando aplicáveis.
+
+O sistema deve validar valores mínimos e máximos, explicar limites de memória quando pertinente e evitar alocações enormes sem confirmação. Alterar as dimensões posteriormente deve ser uma operação explícita, com pré-visualização/confirmar/cancelar e política definida para conteúdo existente.
+
+## 3.5 Desenhar junto ou sob as barras
+
+As barras flutuantes podem sobrepor a folha. A política de entrada deve ser determinística:
+- Um gesto iniciado sobre um controlo interativo pertence ao controlo.
+- Um gesto iniciado na pega da barra move a barra.
+- Um gesto iniciado numa zona de desenho livre inicia o desenho, se a ferramenta ativa desenhar.
+- Um gesto de navegação reconhecido como gesto de dois dedos navega a vista.
+- A aplicação não pode transformar o arrasto de uma barra num traço.
+- A aplicação não pode transformar um traço iniciado na folha num arrasto de barra apenas porque a barra se moveu por cima de outra área.
+- Se os controlos estiverem a cobrir uma zona, o utilizador pode mover ou ocultar a barra para desenhar nessa zona sem obstáculos.
+
+---
+
+# 4. Barras flutuantes — requisito crítico de produto
+
+## 4.1 Regra de layout
+
+**A área de trabalho ocupa todo o espaço disponível do editor. As barras são desenhadas por cima dela.** A presença de uma barra não deve diminuir a largura ou altura do canvas, empurrar a folha, alterar a escala do projeto ou criar uma faixa vazia depois de a barra ser movida.
+
+Não implementar a barra de ferramentas como uma coluna fixa de layout nem a barra superior como um cabeçalho que reserva sempre espaço dentro do canvas. A interface do sistema Android pode continuar a ter as suas áreas seguras; dentro da área da aplicação, as barras do editor são overlays.
+
+## 4.2 Barra superior
+
+Pode disponibilizar, conforme o modo e o espaço:
+- Menu do projeto e ações de ficheiro.
+- Nome do projeto.
 - FPS de reprodução.
+- Indicador de frame atual e total.
+- Duração/intervalo de desenho e controlos temporais.
+- Câmara/enquadramento.
+- Cor atual.
 - Acesso à timeline, camadas e cenários.
-- Controlos de câmara.
-- Cor atual e acesso ao seletor de cores.
-- Acesso às opções da ferramenta ou do projeto.
+- Opções de ferramenta e definições.
 
-Comportamento obrigatório:
-- Flutua sobre a área de trabalho.
-- Pode ser arrastada para uma posição permitida pelo utilizador.
-- Pode ser ocultada e chamada novamente.
-- Não deve reduzir a área do canvas quando se move ou aparece.
-- Deve evitar ficar permanentemente por cima de controlos importantes ou de uma zona onde o artista esteja a desenhar.
-- A posição e o estado visível/oculto devem ser guardados nas preferências de interface.
-- Deve respeitar margens seguras do Android e não ficar inacessível atrás de recortes do ecrã.
+O conjunto visível pode adaptar-se ao tamanho do ecrã, mas nenhuma ação importante deve desaparecer sem alternativa acessível.
 
-### 2.3 Barra de ferramentas móvel
+## 4.3 Barra de ferramentas
 
-A barra de ferramentas contém os instrumentos de desenho e edição, incluindo:
+Ferramentas base:
 - Pincel.
 - Borracha.
-- Balde de tinta/preenchimento.
+- Balde de preenchimento.
 - Laço/seleção.
-- Desfazer e refazer.
-- Navegação entre frames.
+- Desfazer.
+- Refazer.
+- Frame anterior.
+- Frame seguinte.
 - Adicionar frame.
-- Reprodução e acesso à onion skin.
-- Outros instrumentos à medida que forem implementados.
+- Reprodução.
+- Onion skin.
+- Acesso às opções da ferramenta.
 
-Comportamento obrigatório:
-- É uma barra flutuante sobre a área de trabalho, não uma coluna fixa que rouba espaço ao canvas.
-- Pode ser arrastada livremente entre posições permitidas no ecrã.
-- Pode ser posicionada junto a qualquer margem ou numa zona conveniente do espaço de trabalho.
-- Pode ser ocultada para deixar a área visual limpa e reaberta por um controlo/gesto previsível.
-- Os ícones podem ser reorganizados pelo utilizador quando essa função estiver implementada.
-- A seleção de um instrumento deve continuar ativa mesmo quando a barra é ocultada.
-- A barra e os seus menus não devem capturar gestos destinados ao desenho quando o gesto começa fora dos seus limites.
+A barra deve ter ícones consistentes, estado ativo inequívoco, descrição acessível e feedback de toque. O conjunto de ferramentas pode crescer, sem exigir que todos os ícones estejam sempre visíveis.
 
-### 2.4 Gestos e interação com barras
+## 4.4 Movimento e posicionamento
 
-- **Arrastar a partir da pega da barra:** move a barra, sem desenhar.
-- **Tocar num ícone:** seleciona/ativa a ferramenta ou abre o respetivo painel.
-- **Premir prolongadamente um ícone:** abre opções adicionais ou um seletor de ferramentas, quando aplicável.
-- **Ocultar:** recolhe a barra e deixa a área de trabalho livre.
-- **Mostrar novamente:** através de um botão discreto ou gesto de reabertura documentado nas definições.
-- O gesto de mover a barra deve ser distinguível do gesto de desenhar; não exigir arrastar um ícone de ferramenta para mover toda a barra.
-- Não depender apenas de gestos escondidos: disponibilizar sempre uma forma descobrível de mostrar novamente as barras.
+- A barra deve ter uma pega/área de arrasto distinta dos botões.
+- Arrastar a pega desloca a barra, sem desenhar.
+- As posições válidas devem manter a barra alcançável e dentro das margens seguras.
+- O utilizador pode posicioná-la junto às margens ou numa posição flutuante útil.
+- Ao mudar de orientação, a aplicação deve recuperar uma posição válida para a orientação atual.
+- Se uma posição guardada ficar fora do ecrã devido a alteração de resolução/orientação, reposicionar a barra de forma segura, sem a perder.
+- A posição pode ser guardada globalmente e/ou por projeto, com comportamento consistente e documentado.
+- Deve existir uma ação para restaurar a posição padrão.
 
-### 2.5 Modos de posicionamento e personalização
+## 4.5 Ocultar e reabrir
 
-A implementação deve suportar:
-- Barra superior flutuante, movível e ocultável.
-- Barra de ferramentas flutuante, movível e ocultável.
-- Reposição para a posição inicial.
-- Posições guardadas separadamente para orientação horizontal e vertical, se necessário.
-- Opção para reorganizar ferramentas e, quando possível, escolher quais aparecem diretamente e quais ficam num menu.
-- Tamanhos de barra/ícones apropriados para toque e acessibilidade.
+- Cada barra pode ser ocultada independentemente.
+- Ocultar a barra não desativa a ferramenta selecionada nem modifica o desenho.
+- Deve existir um mecanismo visível/discreto e documentado para reabrir a barra.
+- A interface não pode depender exclusivamente de um gesto secreto.
+- O estado visível/oculto deve ser persistido conforme a preferência escolhida.
+- Ao reabrir, a barra regressa a uma posição acessível.
+- Ocultar barras liberta a vista visual; não muda as dimensões reais da folha nem o enquadramento da câmara.
 
-A posição inicial deve seguir os esboços fornecidos pelo autor. A personalização não deve alterar a organização base sem ação explícita do utilizador.
+## 4.6 Reorganização e acessibilidade
 
-### 2.6 Referência de comportamento: FlipaClip
+- Premir prolongadamente uma ferramenta pode abrir opções, categorias ou personalização quando essa ação fizer sentido.
+- A reorganização de ícones deve ser explícita, para não confundir um toque normal com uma tentativa de mover a barra.
+- A ferramenta selecionada deve continuar evidente.
+- Menus e painéis devem poder ser fechados sem perder a edição.
+- Os controlos devem respeitar áreas seguras e não ficar atrás de recortes, teclado ou barras do sistema.
+- Não cobrir permanentemente o indicador de frame, a câmara ou ações críticas.
 
-A referência funcional é a ideia de mover a barra de ferramentas pelo palco/área de desenho para libertar espaço e poder reorganizar os ícones. A página de apresentação da aplicação FlipaClip descreve mover a barra de ferramentas e reorganizar os ícones.
+## 4.7 Testes obrigatórios de barras
 
-Referências:
-- FlipaClip na Google Play: https://play.google.com/store/apps/details?id=com.vblast.flipaclip
-- FlipaClip na App Store (descrição de ferramentas móveis): https://apps.apple.com/us/app/flipa-clip-draw-2d-animation/id1101848914
-- Centro de suporte: https://support.flipaclip.com/
+1. Mostrar/ocultar cada barra não altera a área nem a escala da folha.
+2. Mover a barra não cria traço, apaga conteúdo ou muda de frame.
+3. Tocar num botão executa apenas a ação desse botão.
+4. Uma barra movida pode ser reaberta e recuperada após reiniciar.
+5. A mudança de retrato para paisagem não deixa uma barra inacessível.
+6. A área que fica livre após mover uma barra não contém uma coluna/faixa reservada.
+7. Se o utilizador mover a barra para longe da folha, a folha mantém o mesmo centro e zoom.
+8. O mecanismo para reabrir barras continua acessível com ambas ocultas.
 
-Estas referências servem para compreender padrões de interação. Não são autorização para copiar código, imagens, ícones proprietários ou a implementação interna de outra aplicação.
+## 4.8 Referências de interação
 
----
+- FlipaClip: https://play.google.com/store/apps/details?id=com.vblast.flipaclip
+- FlipaClip — suporte: https://support.flipaclip.com/
+- Autodesk Sketchbook — toolbars: https://help.autodesk.com/cloudhelp/ENU/SKETPRO-Help/files/sb-basics/SKETPRO_Help_sb_basics_toolbars_html.html
 
-## 3. Folha branca, espaço de trabalho, zoom e navegação
-
-### 3.1 Separação visual
-
-- **Espaço de trabalho:** fundo cinzento-escuro/quase preto.
-- **Folha/canvas do projeto:** branca por padrão, retangular e delimitada pelas dimensões do projeto.
-- **Conteúdo artístico:** traços, imagens, fundos, camadas e outros elementos que pertençam ao projeto.
-- A folha branca não deve ser confundida com todo o espaço de trabalho.
-
-### 3.2 Zoom e deslocamento
-
-- Zoom com gesto de pinça de dois dedos.
-- Deslocamento da vista com gesto de dois dedos, ou ferramenta de mão dedicada.
-- O zoom deve ampliar a folha visualmente; não deve aumentar a resolução real do projeto.
-- O utilizador deve poder afastar a vista para ver a folha inteira e aproximar-se para desenhar detalhes.
-- A navegação da vista não pode mover os desenhos dentro do projeto.
-- Disponibilizar um comando para ajustar a folha à área visível.
-- Mostrar opcionalmente o nível de zoom e a rotação da vista.
-- A folha pode ultrapassar visualmente os limites do ecrã quando ampliada; isso é esperado.
-- A área de desenho deve permanecer utilizável por baixo das barras flutuantes.
-
-### 3.3 Resolução e formato
-
-Ao criar um projeto, permitir definir:
-- Nome.
-- Largura e altura da folha em píxeis.
-- FPS.
-- Opcionalmente, uma predefinição de proporção (por exemplo, 16:9, 4:3, 1:1) que preencha as dimensões correspondentes.
-- Margens de câmara, se forem utilizadas pelo modo de câmara.
-
-A resolução do projeto é independente do zoom da interface. Alterar as dimensões da folha deve ser uma operação própria, com confirmação e tratamento cuidadoso do conteúdo existente.
+Estas fontes são referências para padrões de utilização, não para copiar recursos proprietários.
 
 ---
 
-## 4. Ecrã inicial e gestão de projetos
+# 5. Ecrã inicial e gestão da biblioteca de projetos
 
-O ecrã inicial segue a referência fornecida:
-- Lista de projetos à esquerda, com miniatura e nome.
-- Área ampla à direita para criar um projeto novo.
-- Ações para abrir projeto e criar novo projeto.
-- Ordenação por nome e por data, quando disponível.
+## 5.1 Estrutura visual
 
-### Criar projeto
+Seguir o esboço fornecido pelo autor:
+- Lista vertical de projetos do lado esquerdo, com miniatura e nome.
+- Área ampla do lado direito dedicada à criação de um novo projeto.
+- Botão de criação claramente visível.
+- Ações de ordenação por nome e data, quando disponíveis.
+- Interface escura, sóbria e organizada.
 
-O diálogo de criação deve permitir:
-- Nome do projeto.
+Em ecrãs pequenos, a mesma função pode adaptar-se a uma disposição vertical sem perder as ações principais. A adaptação não deve introduzir um feed fictício ou conteúdo de demonstração apresentado como trabalho real.
+
+## 5.2 Operações de projeto
+
+- Criar projeto.
+- Abrir projeto.
+- Renomear projeto.
+- Duplicar projeto.
+- Apagar projeto, sempre com confirmação.
+- Ordenar por nome e data da última alteração.
+- Mostrar miniatura e metadados básicos.
+- Identificar projetos com erro de recuperação ou migração.
+- Recuperar um projeto interrompido quando existir uma cópia recuperável.
+
+## 5.3 Diálogo de novo projeto
+
+Campos e comportamentos:
+- Nome obrigatório e validado.
+- Largura/altura ou predefinição.
 - FPS inicial.
-- Largura e altura da folha.
-- Predefinições de tamanho/proporção.
-- Confirmar ou cancelar.
+- Resumo da dimensão escolhida.
+- Opções de câmara/margens quando relevantes.
+- Botões claros de criar e cancelar.
+- Validação antes de criar ficheiros.
+- Estimativa ou aviso de memória para dimensões excessivas, quando possível.
 
-Ao criar, iniciar com uma folha branca, uma camada de desenho inicial e um cenário/fundo inicial conforme o modelo do projeto.
+Ao criar o projeto, inicializar dados reais: folha branca, estrutura temporal inicial, camada inicial, cenário/fundo inicial e câmara/enquadramento inicial coerente.
 
-### Persistência
+## 5.4 Estado e armazenamento
 
-- Guardar os projetos no armazenamento privado da aplicação.
-- Guardar alterações automaticamente, sem exigir que o utilizador carregue sempre em Guardar.
-- Mostrar um estado de gravação e apresentar erros de armazenamento de forma clara.
-- Permitir abrir, renomear, duplicar e apagar projetos com confirmação para ações destrutivas.
-- Recuperar alterações quando a aplicação fecha inesperadamente, sempre que possível.
-- Não apresentar projetos fictícios como se fossem trabalho real do utilizador. Projetos de exemplo, se existirem, devem estar identificados como exemplos.
+- O armazenamento local é o padrão.
+- O nome e os metadados devem sobreviver ao fecho da aplicação.
+- A miniatura deve representar conteúdo real do projeto.
+- O estado “a guardar/guardado/erro” deve ser comunicado sem interromper desnecessariamente o desenho.
+- Projetos corrompidos não devem ser sobrescritos automaticamente sem tentar recuperação.
+- A remoção deve explicar que o projeto será apagado e pedir confirmação.
+- Não pedir permissões de armazenamento amplas se APIs modernas do Android permitirem acesso escolhido pelo utilizador.
 
 ---
 
-## 5. Editor e disposição inicial
+# 6. Editor: estrutura e painéis
 
-A disposição inicial deve respeitar os esboços do autor:
+## 6.1 Organização base
+
+A estrutura visual de referência inclui:
 - Barra superior flutuante.
+- Timeline no topo do editor, quando visível.
+- Faixas de camadas e cenários associadas à timeline.
+- Folha branca no espaço de trabalho escuro.
 - Barra de ferramentas flutuante.
-- Timeline no topo do editor quando ativada.
-- Camadas e cenários associados às respetivas faixas.
-- Folha branca no centro do espaço de trabalho.
-- Indicador persistente do frame atual e total de frames.
-- Painéis contextuais de opções de ferramenta, cor, câmara e camadas, que podem ser abertos e fechados.
+- Indicador de frame atual e total.
+- Controlos de zoom/rotação da vista.
+- Painéis contextuais de ferramenta, cor, camadas, cenário e câmara.
 
-A disposição não deve ficar rígida: o utilizador deve poder mover/ocultar as barras. Os painéis contextuais podem sobrepor a área de trabalho, mas devem ter forma simples de fechar, e não devem cobrir permanentemente o centro da folha sem necessidade.
+A timeline pode ser recolhida/expandida por um controlo claro. A barra superior e a barra de ferramentas continuam móveis e sobrepostas ao espaço de trabalho.
 
----
+## 6.2 Painéis contextuais
 
-## 6. Ferramentas de desenho
+- Abrir um painel não deve modificar conteúdo por si só.
+- Os painéis devem ter um botão de fechar evidente.
+- A edição em painel deve atualizar o estado real.
+- Fechar o painel mantém alterações já confirmadas.
+- Cancelar um diálogo descarta apenas alterações não confirmadas.
+- O painel deve adaptar-se a telemóvel/tablet e não impedir acesso ao canvas sem necessidade.
+- Quando um painel cobre uma região, o utilizador pode fechá-lo ou movê-lo conforme o modelo de interação.
 
-### 6.1 Pincel
+## 6.3 Indicador de frame
 
-Requisitos:
-- Desenho contínuo por toque ou stylus.
-- Traços suaves e interpolação de pontos.
-- Tamanho e opacidade configuráveis.
-- Cor atual configurável.
-- Suporte à pressão da caneta quando o dispositivo a disponibilizar.
-- Suavização/estabilização configurável.
-- Pré-visualização do tamanho do pincel, se viável.
-- Diferentes presets de pincel através de um sistema extensível.
-
-### 6.2 Borracha
-
-- Apaga apenas o conteúdo editável da camada/frame selecionados, de acordo com a semântica do tipo de camada.
-- Tamanho e opacidade configuráveis quando suportados.
-- Deve respeitar a camada ativa.
-- Deve suportar desfazer/refazer.
-
-### 6.3 Balde de preenchimento
-
-- Preenche regiões de acordo com tolerância configurável.
-- Deve limitar a operação à camada ou composição definida nas opções da ferramenta.
-- Deve evitar bloquear a interface durante preenchimentos grandes.
-- Deve permitir desfazer o resultado.
-- Erros ou regiões inválidas não podem destruir o conteúdo existente.
-
-### 6.4 Laço/seleção
-
-- Selecionar uma área ou conteúdo.
-- Mover, transformar, copiar, cortar ou apagar a seleção quando suportado.
-- Mostrar controlos de transformação claros.
-- Cancelar a seleção sem alterar o desenho.
-- Respeitar a camada e o frame ativos.
-
-### 6.5 Seletor de cor e paletas
-
-- Seletor RGB e HSB.
-- Confirmação/cancelamento da cor.
-- Amostra da cor atual na interface.
-- Histórico de cores recentes.
-- Paletas do projeto, cores favoritas e capacidade de voltar a usar cores guardadas.
-- A cor selecionada deve ser partilhada pelas ferramentas que dela dependem.
-
-### 6.6 Arrastar a cor para preencher
-
-Como interação adicional:
-- O utilizador pode arrastar a amostra de cor para uma região fechada da folha para tentar preenchê-la.
-- Esta interação utiliza o mesmo motor de preenchimento do balde.
-- Deve haver feedback visual sobre a região-alvo.
-- Deve ser possível cancelar antes de confirmar quando aplicável.
-- Se não houver uma região válida, não alterar o desenho.
-- O gesto não deve entrar em conflito com desenhar, mover a vista ou selecionar.
-
-### 6.7 Desfazer e refazer
-
-- Desfazer/refazer operações de desenho e edição.
-- Quando possível, incluir operações de frame, camada, seleção e transformação.
-- O histórico deve pertencer ao projeto e ser coerente com as operações feitas.
-- Não mostrar botões ativos quando não há operação disponível para desfazer/refazer.
+O indicador “Frame X de Y” deve permanecer disponível mesmo com a timeline recolhida. Deve atualizar-se ao navegar, inserir ou remover frames, sem contagens obsoletas.
 
 ---
 
-## 7. Frames e timeline de animação
+# 7. Ferramentas de desenho e edição
 
-### 7.1 Independência dos frames
+## 7.1 Pincel e traços
 
-Cada frame deve conservar o seu próprio conteúdo. Mudar de frame não pode apagar, substituir ou misturar silenciosamente o desenho de outro frame.
+O motor de traços deve suportar:
+- Traços contínuos com dedo e stylus.
+- Interpolação entre amostras para evitar segmentos partidos.
+- Tamanho configurável.
+- Opacidade configurável.
+- Cor selecionada.
+- Suavização/estabilização ajustável.
+- Sensibilidade à pressão quando disponível.
+- Pré-visualização do tamanho quando viável.
+- Cancelamento seguro do traço em caso de interrupção de entrada.
+- Gravação como conteúdo editável do frame/camada, não como decoração temporária da UI.
 
-A representação interna deve ligar cada frame ao conteúdo das camadas e cenários aplicáveis. A timeline é uma vista e um controlador desse estado, não um conjunto de miniaturas desligadas dos dados reais.
+O sistema de pincéis deve ser extensível por uma interface comum de motor e presets. Cada preset pode definir tamanho, opacidade, espaçamento, suavização, dinâmica de pressão e parâmetros específicos suportados. Parâmetros não suportados pelo motor não devem ser apresentados como funcionais.
 
-### 7.2 Timeline
+## 7.2 Biblioteca de pincéis
 
-- A timeline pode ser mostrada/ocultada.
-- A timeline deve permitir selecionar um frame.
-- Deve mostrar a sequência e o frame ativo.
-- Deve incluir faixas de camadas e cenários conforme o modelo do projeto.
-- Deve permitir adicionar frames.
-- Deve suportar deslocamento horizontal quando a sequência não cabe no ecrã.
-- A interface deve adaptar a quantidade de células visíveis ao tamanho do dispositivo.
-- O frame atual e a contagem total devem permanecer visíveis mesmo quando a timeline está recolhida.
+- Categorias e lista de pincéis.
+- Pincéis recentes.
+- Preset ativo claramente identificado.
+- Ajustes de tamanho e opacidade.
+- Espaçamento, suavização e outros parâmetros quando suportados.
+- Possibilidade futura de adicionar presets e texturas próprias.
+- Metadados versionados para que um projeto preserve a identificação do preset utilizado.
+- Se um preset faltar numa versão futura, apresentar fallback e aviso em vez de falhar ao abrir o projeto.
 
-### 7.3 Operações de frame
+Bibliotecas externas só podem ser integradas depois de confirmar licença, dependências, compatibilidade com Android e licença de cada textura/preset. A licença do motor não garante direitos sobre conteúdos de terceiros.
 
-Planeadas:
+## 7.3 Borracha
+
+- Apagar conteúdo na camada/frame ativo.
+- Tamanho e opacidade quando aplicáveis.
+- Respeitar o tipo de conteúdo e a camada ativa.
+- Desfazer/refazer.
+- Não apagar a folha nem outras camadas por engano.
+- Comportamento consistente durante zoom e pan.
+
+## 7.4 Balde de preenchimento
+
+- Preencher uma região de cor semelhante, com tolerância ajustável.
+- Definir se o preenchimento considera a camada ativa ou uma composição de referência, quando implementado.
+- Respeitar transparência e limites de imagem.
+- Executar em tarefa de fundo quando a área for grande.
+- Permitir cancelar uma operação longa quando seguro.
+- Não bloquear o desenho por tempo indefinido.
+- Uma falha ou região inválida não altera o conteúdo.
+- O resultado deve poder ser desfeito.
+
+## 7.5 Arrastar cor para preencher
+
+- Arrastar a amostra da cor selecionada até uma região fechada.
+- Usar o mesmo motor de preenchimento do balde.
+- Mostrar feedback da região-alvo.
+- Permitir cancelar antes da aplicação quando tecnicamente viável.
+- Se não for detetada uma região válida, não alterar o projeto.
+- Evitar conflito com traço, pan, seleção e movimento de barras.
+- O resultado deve ser persistido e incluído no histórico de desfazer/refazer.
+
+## 7.6 Laço e seleção
+
+- Selecionar uma região ou conteúdo.
+- Indicar visualmente a seleção ativa.
+- Mover e transformar a seleção quando suportado.
+- Copiar, cortar, colar e apagar conteúdo selecionado.
+- Cancelar a seleção sem modificar a arte.
+- Respeitar o frame e a camada ativos.
+- Converter corretamente coordenadas com zoom/pan.
+- Evitar que o arrasto da seleção seja interpretado como desenho.
+
+## 7.7 Cor, RGB, HSB e paletas
+
+- Amostra da cor ativa.
+- Seletor com modos RGB e HSB.
+- Confirmar/cancelar seleção de cor.
+- Paletas do projeto.
+- Cores favoritas e recentes.
+- Persistência das paletas no projeto.
+- Cor consistente entre pincel, preenchimento e ferramentas compatíveis.
+- Contraste e apresentação acessíveis, sem depender exclusivamente da cor para comunicar estado.
+
+## 7.8 Desfazer/refazer
+
+- Histórico coerente por projeto.
+- Suportar desenho, borracha, preenchimento, transformações e operações estruturais quando implementadas.
+- Não criar entradas inúteis para toques sem alteração.
+- Agrupar operações de gesto de forma natural, para um traço não exigir dezenas de ações de desfazer.
+- Operações em lote devem ser atómicas: completar integralmente ou falhar sem deixar estado parcial.
+- Atualizar os botões de acordo com a disponibilidade real.
+- Limitar memória do histórico de forma segura e comunicar limitações se necessário.
+- Nunca perder o projeto inteiro devido a uma falha no histórico.
+
+## 7.9 Formas e ferramentas adicionais
+
+O sistema deve permitir acrescentar novas ferramentas sem reescrever o editor inteiro. Formas geométricas, conta-gotas, simetria e ferramentas adicionais podem ser adicionadas quando definidas, implementadas e testadas. Não devem aparecer como botões decorativos sem comportamento.
+
+---
+
+# 8. Frames, exposição e modelo temporal
+
+## 8.1 Semântica de frame
+
+Cada frame é uma unidade temporal com conteúdo editável associado às camadas. A navegação não pode apagar, fundir ou substituir desenhos silenciosamente. A timeline e o Frame Viewer são representações diferentes do mesmo estado de projeto.
+
+O modelo temporal deve distinguir:
+- Índice/ordem do frame.
+- Conteúdo do frame por camada.
+- Duração/exposição do desenho quando o modelo a suportar.
+- FPS de reprodução/exportação.
+- Relações com cenários partilhados ou animados.
+
+## 8.2 Operações básicas
+
 - Adicionar frame em branco.
-- Duplicar/copiar frame.
-- Colar à esquerda ou à direita como inserção, deslocando os frames seguintes.
+- Duplicar frame.
+- Copiar frame.
+- Colar à esquerda/direita como inserção.
 - Mover frame.
-- Apagar frame com possibilidade de desfazer.
+- Apagar frame.
+- Selecionar frame e navegar para ele.
+- Ajustar duração/exposição quando suportado.
+- Desfazer/refazer as operações.
+- Mostrar miniaturas atualizadas.
+
+Colar como inserção deve deslocar os frames seguintes. Não pode sobrescrever frames existentes silenciosamente. Se futuramente existir uma operação de substituição, ela deve ser explicitamente diferente de inserir.
+
+## 8.3 Operações em lote
+
 - Selecionar vários frames.
-- Copiar/duplicar/mover/apagar em lote.
-- Ajustar duração de desenho ou intervalo de frames, conforme o modelo temporal adotado.
-- Inverter uma sequência de frames quando implementado.
+- Copiar, duplicar, mover e apagar a seleção.
+- Inverter ordem de uma sequência quando implementado.
+- Preservar alinhamento temporal entre camadas e cenários.
+- Validar o resultado antes de confirmar.
+- Oferecer desfazer para o conjunto da operação.
+- Evitar que a remoção de frames deixe referências inválidas.
 
-As operações de inserção não devem sobrescrever frames existentes sem aviso. Operações em lote devem ser consistentes entre camadas e cenários.
+## 8.4 FPS e duração
 
-### 7.4 Frame Viewer
+FPS é a taxa de reprodução/exportação, não o total de frames. Os controlos de FPS devem permitir alterar o valor com entrada numérica e controlos incrementais. O sistema deve validar valores suportados e calcular a duração a partir do modelo temporal efetivo.
 
-Uma vista alternativa para gerir frames:
-- Grelha ou lista de miniaturas.
+Se houver exposições de duração variável, a timeline deve comunicar essa diferença sem confundir o número de desenhos com a duração total.
+
+## 8.5 Modos de reprodução
+
+- **ONCE:** tocar do início ao fim e parar.
+- **LOOP:** repetir continuamente.
+- **PING_PONG:** avançar e retroceder sem duplicar desnecessariamente os extremos.
+- Reproduzir a sequência real do projeto, incluindo durações/exposições aplicáveis.
+- Respeitar FPS definido.
+- Interromper e retomar de forma previsível.
+- Não incluir onion skin nem controlos do editor no resultado renderizado.
+- Mostrar estado de reprodução e permitir parar rapidamente.
+
+## 8.6 Frame Viewer
+
+Vista alternativa para gerir a sequência:
+- Grelha/lista de miniaturas.
 - Seleção individual e múltipla.
 - Copiar, duplicar, mover e apagar.
-- Pré-visualização.
-- Navegação para o frame selecionado.
+- Navegar para o frame.
+- Pré-visualizar a sequência.
+- Indicar o frame ativo.
+- Reordenar com gestos explícitos, com feedback visual.
 
-O Frame Viewer e a timeline devem usar o mesmo estado de projeto; alterações feitas numa vista devem aparecer imediatamente na outra.
+Alterações no Frame Viewer devem atualizar a timeline e vice-versa. Não pode existir uma segunda cópia independente dos dados.
 
-### 7.5 FPS e duração
+## 8.7 Flipbook
 
-- FPS define a velocidade de reprodução/exportação, não o número total de frames.
-- Controlos numéricos permitem ajustar o FPS.
-- Validar valores dentro de limites definidos pela aplicação.
-- A duração final deriva da sequência, das durações dos desenhos e do FPS, segundo o modelo temporal implementado.
+Modo focado em desenhar frame a frame:
+- Mostrar o frame atual em destaque.
+- Navegar para anterior/seguinte.
+- Adicionar, duplicar, copiar ou limpar frame.
+- Ativar onion skin.
+- Recolher/expandir a vista conforme o ecrã.
+- Manter ligação ao mesmo projeto e à mesma timeline.
 
-### 7.6 Modos de reprodução
-
-Modos planeados:
-- **Uma vez (ONCE):** reproduzir do início ao fim e parar.
-- **Loop:** repetir do início após o fim.
-- **Ping-pong:** reproduzir para a frente e depois para trás, sem duplicar desnecessariamente os frames dos extremos.
-
----
-
-## 8. Onion skin
-
-- Mostrar versões não editáveis dos frames anteriores e/ou seguintes enquanto o artista desenha no frame atual.
-- Definir quantos frames anteriores/seguintes aparecem.
-- Ajustar a opacidade.
-- Diferenciar visualmente frames anteriores e seguintes.
-- O onion skin é apenas uma ajuda visual: não altera os desenhos e não é exportado como parte da animação.
-- A alteração de frame deve atualizar a visualização da onion skin.
-- A onion skin deve poder ser ativada/desativada rapidamente.
+O Flipbook é um modo de trabalho, não uma exportação separada nem um projeto duplicado.
 
 ---
 
-## 9. Camadas e cenários
+# 9. Onion skin
 
-### 9.1 Camadas
-
-- Criar, selecionar, renomear e apagar camadas.
-- Alterar ordem, visibilidade e opacidade.
-- Identificar claramente a camada ativa.
-- Impedir edição acidental de camadas bloqueadas, caso exista bloqueio.
-- Manter a relação correta entre camadas, frames e histórico.
-
-### 9.2 Cenários/fundos
-
-O cenário/fundo é conceptualmente separado das camadas de animação.
-
-Modos pretendidos:
-1. **Fundo partilhado:** o mesmo cenário é reutilizado em vários frames; editar a fonte partilhada atualiza todas as instâncias que a referenciam.
-2. **Fundo animado:** o conteúdo de fundo pode mudar frame a frame.
-
-A interface deve deixar claro qual modo está ativo. Editar o fundo não pode apagar acidentalmente a animação principal. A visibilidade e a opacidade devem ser controláveis.
+- Mostrar frames anteriores e/ou seguintes como referência não editável.
+- Configurar quantidade de frames anteriores e seguintes.
+- Ajustar opacidade.
+- Distinguir visualmente anteriores e seguintes.
+- Atualizar ao mudar de frame.
+- Ativar/desativar rapidamente.
+- Nunca misturar a referência com o conteúdo editável do frame atual.
+- Nunca incluir onion skin na exportação final.
+- Não persistir as imagens de onion skin como se fossem traços do frame atual.
+- A composição deve ser eficiente e usar cache sem comprometer a correção.
 
 ---
 
-## 10. Biblioteca de substituições
+# 10. Camadas e cenários/fundos
 
-Biblioteca planeada para elementos reutilizáveis de animação, como:
-- Bocas para diálogo.
+## 10.1 Camadas
+
+- Criar e apagar.
+- Renomear.
+- Reordenar.
+- Alterar visibilidade.
+- Alterar opacidade.
+- Identificar camada ativa.
+- Bloquear edição quando o bloqueio estiver disponível.
+- Mostrar miniaturas ou indicadores úteis.
+- Integrar com a timeline e com o histórico.
+- Preservar as relações entre frames e camadas ao inserir, mover ou remover frames.
+
+## 10.2 Cenários/fundos
+
+Cenários são conceptualmente separados das camadas de animação.
+
+### Fundo partilhado
+O mesmo cenário pode ser referenciado por vários frames. Editar o cenário partilhado atualiza as referências que apontam para essa fonte, sem apagar a animação principal.
+
+### Fundo animado
+O conteúdo do fundo pode mudar frame a frame.
+
+A interface deve deixar claro o modo utilizado. Alterar visibilidade ou opacidade do fundo não pode afetar por engano a camada principal. Os cenários devem ter nome, visibilidade, opacidade e edição coerentes com o modelo do projeto.
+
+## 10.3 Sincronização de faixas
+
+A inserção, duplicação, deslocação ou remoção de frames deve preservar a consistência temporal entre as faixas de camadas e cenários. A política para faixas que não contêm desenho num determinado frame deve ser explícita e testada.
+
+---
+
+# 11. Biblioteca de substituições
+
+Biblioteca de elementos reutilizáveis para animação, por exemplo:
+- Bocas e formas de boca para diálogo.
 - Olhos e expressões.
-- Poses e partes de personagens.
+- Poses.
+- Partes de personagens.
 - Variações de desenho.
 
 Requisitos:
-- Miniaturas e nomes.
-- Inserir/substituir uma variante num frame ou intervalo.
-- Preservar as alternativas da biblioteca.
-- Não substituir silenciosamente desenhos fora do intervalo escolhido.
-- Integrar com o estado do projeto e o histórico quando possível.
+- Miniaturas, nomes e categorias.
+- Inserir ou atribuir uma variante a frame/intervalo selecionado.
+- Preservar alternativas na biblioteca.
+- Evitar substituição silenciosa fora do intervalo escolhido.
+- Permitir remover uma atribuição sem apagar a fonte da biblioteca.
+- Integrar com a persistência do projeto e o histórico quando aplicável.
+- Se o recurso de origem faltar, mostrar um aviso recuperável.
 
 ---
 
-## 11. Câmara e enquadramento
+# 12. Câmara, enquadramento e saída
 
-A câmara define o enquadramento final da animação, independentemente da navegação do editor.
+## 12.1 Câmara do projeto
 
-- Mostrar um retângulo de enquadramento.
-- Definir dimensões/proporção de saída.
-- Ajustar posição, escala e rotação quando suportado.
-- Permitir pré-visualizar o resultado enquadrado.
-- Exportar com base no enquadramento da câmara, não na posição atual da interface.
-- Aumentar o zoom de trabalho não deve alterar o enquadramento exportado.
-- Animação de propriedades da câmara por keyframes é uma funcionalidade futura.
+A câmara define o enquadramento final e é independente do zoom/pan da interface. Deve suportar:
+- Retângulo de enquadramento sobre a folha.
+- Dimensões e proporção de saída.
+- Posição.
+- Escala/zoom.
+- Rotação quando suportada.
+- Pré-visualização do enquadramento.
+- Reposição da câmara.
+- Valores numéricos quando aplicáveis.
+
+O zoom de trabalho não pode alterar o enquadramento exportado. A exportação usa o estado da câmara e as definições de saída do projeto, não a posição dos painéis.
+
+## 12.2 Keyframes de câmara
+
+A animação da câmara por keyframes é prevista na arquitetura, mas só pode ser anunciada como funcional quando houver criação/edição, interpolação, pré-visualização e exportação validadas.
 
 ---
 
-## 12. Animação por keyframes
+# 13. Animação por keyframes e transformações
 
-Funcionalidade planeada para animar propriedades ao longo do tempo:
+O produto completo deve prever animação de propriedades ao longo do tempo:
 - Posição X/Y.
 - Escala X/Y.
 - Rotação.
 - Opacidade.
-- Posteriormente, propriedades de câmara e filtros quando suportadas.
+- Propriedades de câmara e filtros quando implementados.
 
-Requisitos:
-- Criar, selecionar, copiar, mover e apagar keyframes.
-- Interpolação entre valores.
-- Modos de easing/interpolação quando implementados.
-- Pré-visualização antes da exportação.
-- Separar claramente keyframes de transformação da animação desenhada frame a frame.
+Comportamentos esperados:
+- Criar, selecionar, mover, copiar e apagar keyframes.
+- Interpolar entre valores.
+- Suportar modos de easing quando disponíveis.
+- Pré-visualizar antes de exportar.
+- Distinguir keyframes de transformação da animação desenhada frame a frame.
+- Guardar as curvas e os valores no projeto.
+- Permitir desfazer/refazer.
+- Definir comportamento de início/fim e ausência de keyframe de forma consistente.
+- Não destruir a arte raster original ao alterar apenas uma transformação.
 
 ---
 
-## 13. Importação e exportação
+# 14. Importação
 
-### 13.1 Importação
+## 14.1 Imagens
 
-Planeada:
-- Importar imagem como referência, elemento de desenho ou conteúdo de cenário.
-- Importar vídeo como referência para rotoscopia.
-- Extrair frames de vídeo com intervalo/frequência configurável, sujeito às capacidades do dispositivo e aos limites de memória.
-- Importar um projeto próprio quando o formato de projeto estiver definido.
+Permitir importar imagem como:
+- Referência visual.
+- Conteúdo de desenho/camada.
+- Recurso de cenário/fundo.
 
-A importação deve apresentar progresso e erros úteis, e não bloquear indefinidamente a interface.
+O fluxo deve permitir escolher o destino, confirmar escala/posicionamento quando aplicável e cancelar sem alterar o projeto. A imagem deve ser tratada com limites de dimensão e memória.
 
-### 13.2 Exportação
+## 14.2 Vídeo e rotoscopia
 
-Formatos planeados:
+O produto completo deve prever:
+- Importar vídeo como referência de rotoscopia.
+- Selecionar intervalo.
+- Extrair frames com frequência/intervalo configurável.
+- Pré-visualizar a extração.
+- Avisar sobre espaço e memória.
+- Cancelar tarefas longas quando seguro.
+- Não carregar o vídeo inteiro na memória se o processamento por partes for possível.
+- Tratar codecs e formatos não suportados com uma mensagem útil.
+
+A disponibilidade real depende dos codecs e APIs Android suportados. Não prometer compatibilidade universal.
+
+## 14.3 Projetos
+
+- Importar projeto no formato nativo versionado.
+- Validar estrutura antes de abrir.
+- Detetar versões futuras ou incompatíveis.
+- Não sobrescrever um projeto existente sem confirmação.
+- Se a migração falhar, preservar o ficheiro de origem e explicar o erro.
+
+---
+
+# 15. Exportação
+
+## 15.1 Formatos-alvo
+
 - MP4.
-- GIF, se a biblioteca e o desempenho permitirem.
-- PNG do frame atual ou de frames selecionados.
+- PNG do frame atual.
+- PNG de frames selecionados.
 - Sequência de PNG numerados.
-- ZIP com frames exportados, quando implementado.
+- ZIP com a sequência exportada.
+- GIF, caso a solução técnica escolhida permita qualidade e desempenho aceitáveis.
 
-A exportação deve:
-- Usar o FPS e o enquadramento selecionados.
-- Mostrar progresso.
-- Permitir cancelar quando tecnicamente seguro.
-- Tratar falta de espaço e falhas de codificação.
-- Guardar ficheiros em local escolhido/autorizado pelo utilizador.
-- Não incluir barras, painéis, onion skin ou indicadores do editor no resultado final.
-- Exportar apenas o conteúdo pretendido do projeto.
+Cada formato só pode ser considerado suportado após teste real com saída válida e verificável.
 
-### 13.3 Áudio
+## 15.2 Opções de exportação
 
-Importação e sincronização de áudio são uma possibilidade futura e não devem ser consideradas implementadas até existirem faixa temporal, reprodução sincronizada e exportação testadas.
+- Intervalo de frames.
+- FPS de saída.
+- Resolução.
+- Câmara/enquadramento.
+- Fundo/transparência conforme o formato e o motor.
+- Local de destino escolhido pelo utilizador.
+- Nome do ficheiro.
+- Opções de qualidade suportadas pelo encoder.
+
+## 15.3 Fluxo e erros
+
+- Pré-visualizar as opções.
+- Mostrar progresso e estado.
+- Permitir cancelar quando seguro.
+- Não bloquear a interface.
+- Tratar falta de espaço, permissão recusada, encoder indisponível e falhas de escrita.
+- Não deixar ficheiros finais incompletos apresentados como válidos.
+- Limpar temporários após sucesso ou cancelamento seguro.
+- Confirmar o destino final e permitir abrir/partilhar o ficheiro através das APIs Android.
+- Não exportar barras, painéis, indicadores, seleção ou onion skin.
+- Não exportar conteúdo oculto se as regras do projeto definirem que camadas ocultas não aparecem na saída.
+- O resultado deve corresponder à pré-visualização de saída.
+
+## 15.4 Áudio
+
+Importação, sincronização e exportação de áudio são requisitos de expansão do produto, mas precisam de uma especificação e testes próprios para faixa temporal, sincronização, controlo de volume, codecs e mistura. Não marcar como concluído antes de uma implementação integral.
 
 ---
 
-## 14. Arquitetura técnica
+# 16. Persistência, autosave e recuperação
 
-### Camada Android/UI
-- Kotlin.
-- Jetpack Compose.
-- Material 3.
-- Gestão de navegação, diálogos, painéis, preferências e acessibilidade.
-- UI separada da lógica do motor de desenho.
+## 16.1 Modelo de armazenamento
 
-### Motor nativo
-- C++ com Android NDK e CMake para operações que beneficiem de implementação nativa.
-- JNI para comunicação com Kotlin.
-- Agrupar operações para evitar chamadas JNI excessivas por ponto de traço.
-- Definir uma API clara e testável entre UI e motor.
-- Não transferir grandes bitmaps entre Kotlin e C++ repetidamente sem necessidade.
+O formato do projeto deve ser versionado e guardar, no mínimo:
+- Identificador e nome do projeto.
+- Versão do formato.
+- Dimensões da folha.
+- FPS e modelo temporal.
+- Frames e ordem.
+- Conteúdo por frame/camada.
+- Camadas, nomes, ordem, visibilidade e opacidade.
+- Cenários e referências partilhadas.
+- Câmara e enquadramento.
+- Paletas e cores.
+- Metadados de pincéis/presets usados.
+- Keyframes e biblioteca de substituições, quando disponíveis.
+- Preferências relevantes do projeto.
 
-### GPU
-- OpenGL ES como primeiro backend gráfico, após validar os requisitos reais do motor.
-- Vulkan pode ser avaliado posteriormente e deve ser usado apenas quando houver benefício demonstrado.
+## 16.2 Consistência
+
+- Guardar em transações/etapas consistentes quando possível.
+- Evitar substituir o último estado válido por um ficheiro incompleto.
+- Validar os dados antes de os carregar.
+- Migrar versões antigas através de passos explícitos.
+- Preservar uma via de recuperação se uma migração falhar.
+- Não depender de caminhos temporários de cache como fonte única dos desenhos.
+
+## 16.3 Autosave
+
+- Guardar alterações automaticamente.
+- Agrupar gravações frequentes para não prejudicar a fluidez.
+- Mostrar estado guardado, a guardar ou erro.
+- Guardar alterações estruturais com prioridade suficiente para evitar inconsistência.
+- Tentar guardar antes de sair quando o ciclo de vida Android permitir.
+- Não depender apenas do evento de encerramento, que pode não ocorrer.
+
+## 16.4 Recuperação
+
+- Recuperar o estado mais recente consistente após encerramento inesperado.
+- Detetar recuperação pendente e informar o utilizador.
+- Não substituir automaticamente um projeto saudável por uma cópia de recuperação sem validação.
+- Permitir descartar a recuperação se o utilizador preferir o último estado guardado.
+- Registar erros técnicos sem incluir o conteúdo artístico privado em telemetria.
+
+---
+
+# 17. Arquitetura técnica
+
+## 17.1 Camada de aplicação
+
+**Kotlin + Jetpack Compose + Material 3**
+- Ecrã inicial e gestão de projetos.
+- Navegação e ciclo de vida Android.
+- Estado da interface e painéis.
+- Barras flutuantes e persistência das suas preferências.
+- Diálogos e validação.
+- Acessibilidade e integração com APIs Android.
+- Coordenação das operações de projeto e exportação.
+
+A interface não deve conter a implementação de todos os algoritmos de desenho. Separar apresentação, modelo de projeto, operações e motor.
+
+## 17.2 Motor nativo
+
+**C++ + Android NDK + CMake**
+- Processamento de traços.
+- Composição de camadas.
+- Operações raster e preenchimento.
+- Transformações e renderização.
+- Geração de miniaturas.
+- Processamento de imagem que beneficie de código nativo.
+- Componentes de renderização e exportação quando apropriado.
+
+O uso de C++ deve ser justificado por necessidades medidas. Não duplicar lógica em Kotlin e C++ sem um contrato claro.
+
+## 17.3 JNI
+
+- Fronteira JNI documentada e pequena.
+- Agrupar dados de um traço em lotes, evitando chamadas por ponto quando não necessário.
+- Validar referências, tamanhos e buffers.
+- Tratar erros de forma recuperável.
+- Evitar cópias repetidas de imagens grandes entre Kotlin e C++.
+- Definir propriedade e duração de vida de buffers.
+- Não permitir que exceções nativas atravessem a fronteira sem tratamento.
+- Testar integração em dispositivos/ABIs suportadas.
+
+## 17.4 GPU e backend gráfico
+
+- Avaliar OpenGL ES como backend inicial.
+- Avaliar Vulkan apenas com caso de uso e medições que justifiquem o custo.
 - Deteção de capacidades e fallback para dispositivos sem suporte adequado.
-- Não presumir que Vulkan será sempre mais rápido ou consumirá menos bateria.
-- CPU/GPU devem ter comportamento funcional equivalente para as operações essenciais.
+- Manter uma estratégia de compatibilidade e evitar caminhos que só funcionem num modelo específico.
+- Não afirmar que Vulkan é sempre mais rápido, mais eficiente ou consome menos bateria.
+- Medir latência de traço, composição, reprodução, memória e temperatura.
+- Evitar uso desnecessário de GPU quando o ecrã está parado.
 
-### Persistência e memória
-- Formato de projeto versionado.
-- Guardar desenhos, frames, camadas, cenários, FPS, dimensões, paletas, opções de ferramenta e preferências de projeto.
-- Não carregar todos os frames em memória simultaneamente quando isso for desnecessário.
-- Criar miniaturas e usar cache com limites.
-- Guardar de forma incremental quando possível.
-- Recuperação após encerramento inesperado.
+## 17.5 Separação de módulos sugerida
 
-### Testes
-- Testes unitários para operações de frames, dimensões, histórico e serialização.
-- Testes de integração para o motor nativo e a ponte JNI.
-- Testes de UI para criar/abrir projeto e navegar entre frames.
-- Testes manuais em dispositivos Android reais, incluindo telemóvel e tablet, quando disponíveis.
-- Medir desempenho e consumo de memória em projetos pequenos e grandes.
+A organização concreta pode evoluir, mas deve manter responsabilidades separadas:
+- **app:** ponto de entrada, ciclo de vida e navegação.
+- **ui/home:** biblioteca e criação de projetos.
+- **ui/editor:** workspace, overlays, painéis e gestos.
+- **domain/project:** entidades e regras do projeto.
+- **domain/timeline:** frames, duração, FPS e operações temporais.
+- **data/project:** serialização, armazenamento, migração e recuperação.
+- **engine/api:** contrato entre aplicação e motor.
+- **engine/native:** C++, renderização e algoritmos.
+- **engine/brushes:** presets e abstrações de pincel.
+- **media/import:** importação de imagem/vídeo.
+- **media/export:** composição e exportação.
+- **tests:** testes unitários, integração e instrumentação.
 
----
-
-## 15. Requisitos não funcionais
-
-- **Offline-first:** desenhar e animar sem conta nem Internet.
-- **Responsividade:** não bloquear a interface durante operações pesadas.
-- **Fiabilidade:** autosave, recuperação e validação dos dados do projeto.
-- **Desempenho:** traços responsivos, zoom fluido e reprodução adequada ao dispositivo; medir em vez de prometer.
-- **Memória:** suportar projetos grandes com carregamento por necessidade e cache limitada.
-- **Acessibilidade:** áreas de toque suficientes, descrições dos ícones e contraste legível.
-- **Orientação:** suportar retrato e paisagem, adaptando a posição inicial das barras sem retirar a opção de as mover.
-- **Privacidade:** projetos locais por padrão; não enviar desenhos para servidores sem uma funcionalidade explícita e consentimento.
-- **Compatibilidade:** definir e testar a versão mínima de Android e as arquiteturas suportadas na configuração do Gradle.
-- **Identidade:** interface escura discreta, sem gradientes neon, respeitando os esboços fornecidos.
+Esta é uma separação lógica, não uma exigência de criar um módulo Gradle por pasta se isso tornar o projeto desnecessariamente complexo.
 
 ---
 
-## 16. Fora do âmbito da primeira versão
+# 18. Gestos: prioridade, arbitragem e conflitos
 
-Não considerar como concluído até existir implementação e validação:
-- Motor de pincéis completo com texturas profissionais.
-- Vulkan.
-- Keyframes completos.
-- Biblioteca de substituições.
-- Importação avançada de vídeo.
-- Exportação MP4/GIF robusta em todas as resoluções.
-- Áudio sincronizado.
-- Sincronização na nuvem.
-- Colaboração em tempo real.
+A implementação deve definir uma política central para decidir que elemento recebe cada gesto.
 
-Estas funcionalidades podem ser desenvolvidas em fases, mas não devem ser representadas como prontas antes dos testes.
+## 18.1 Prioridade de interação
+
+1. Controlos explicitamente tocados.
+2. Pega de movimento da barra.
+3. Manipulação de seleção/transformação ativa.
+4. Gestos de navegação de dois dedos.
+5. Ferramenta ativa de desenho, quando o gesto começa numa área de desenho disponível.
+
+A ordem deve ser adaptada quando uma ferramenta exigir outro comportamento, mas não pode existir ambiguidade silenciosa.
+
+## 18.2 Casos que devem ser testados
+
+- Arrastar a pega da barra superior.
+- Arrastar a pega da barra de ferramentas.
+- Tocar num ícone enquanto há um traço anteriormente iniciado.
+- Desenhar perto de uma barra.
+- Pinçar com dois dedos sobre a folha.
+- Deslocar a folha sem desenhar.
+- Mover uma seleção.
+- Arrastar uma cor para preencher.
+- Usar stylus enquanto a outra mão navega, quando o dispositivo permitir.
+- Rodar o dispositivo durante uma operação.
+- Interromper a entrada por notificação, suspensão ou perda de foco.
+
+## 18.3 Cancelamento de gesto
+
+Quando o Android interromper a sequência de entrada, o motor deve finalizar ou cancelar o gesto de forma consistente. Não deixar traços presos, seleções em estado inválido ou barras a saltar para coordenadas incorretas.
 
 ---
 
-## 17. Fases de desenvolvimento
+# 19. Interface visual e design system
 
-### Fase 1 — Base compilável
-- Projeto Android, Compose, NDK/CMake e JNI.
-- Ecrã inicial e criação de projeto.
-- Editor de base com folha branca.
-- Workflow de compilação na nuvem.
+## 19.1 Direção visual
 
-### Fase 2 — Área de trabalho e barras flutuantes
-- Área de trabalho de ecrã inteiro.
-- Barra superior e barra de ferramentas arrastáveis.
-- Ocultar/mostrar sem reduzir a área do canvas.
-- Guardar posições por orientação.
-- Zoom e deslocamento da folha sem alterar a resolução.
-- Resolver conflitos entre gestos de desenho, navegação e movimento das barras.
+- Tema escuro para a área exterior da folha.
+- Folha de desenho branca por padrão.
+- Cinzentos escuros e tons azul-acinzentados discretos.
+- Acentos moderados para seleção e estado ativo.
+- Sem gradientes neon ou efeitos decorativos que prejudiquem a leitura.
+- Ícones vetoriais consistentes, sem usar emojis como substitutos de ícones profissionais.
+- Contraste legível e hierarquia clara.
+- Feedback visual para ações ativas, seleção, gravação, reprodução e erro.
 
-### Fase 3 — Desenho real
-- Motor de traços.
-- Pincel, borracha, cor e tamanho.
-- Desfazer/refazer.
-- Limites de desenho e conversão correta entre coordenadas do ecrã e coordenadas da folha.
+## 19.2 Consistência
 
-### Fase 4 — Projeto e frames persistentes
-- Guardar e reabrir projetos.
+- Mesmo símbolo e semântica para a mesma ação.
+- Ações destrutivas distinguíveis de ações normais.
+- Confirmação para apagar projetos e operações de alto impacto.
+- Menus contextuais com ações relevantes ao objeto selecionado.
+- Estados vazios que explicam como começar, sem inventar dados de utilizador.
+- Mensagens de erro com causa provável e ação recuperável quando possível.
+
+## 19.3 Acessibilidade
+
+- Descrições acessíveis para ícones.
+- Alvos de toque adequados.
+- Escala de texto compatível com as definições do Android sempre que possível.
+- Não depender exclusivamente da cor para indicar seleção.
+- Foco e navegação coerentes para entradas alternativas.
+- Anúncio acessível de estados importantes, como erro de gravação e conclusão de exportação.
+- Opções para aumentar controlos sem quebrar a área de trabalho.
+
+---
+
+# 20. Desempenho, memória, bateria e estabilidade
+
+Os alvos concretos devem ser definidos por testes em dispositivos de referência. Os seguintes princípios são obrigatórios:
+
+- O desenho deve apresentar baixa latência percetível.
+- A composição da interface não deve reconstruir desnecessariamente o projeto inteiro a cada ponto de traço.
+- A geração de miniaturas deve ocorrer fora do caminho crítico de entrada.
+- A reprodução não deve bloquear os controlos do editor.
+- A exportação deve ser executada em segundo plano com progresso.
+- A memória deve ser limitada por políticas de cache e carregamento sob demanda.
+- Projetos grandes não devem obrigar a manter todos os bitmaps de todos os frames na memória.
+- O motor deve libertar recursos nativos quando projetos e ecrãs são fechados.
+- A aplicação deve reduzir trabalho quando não está visível.
+- A renderização não deve continuar intensamente quando o projeto está parado.
+- Monitorizar ANR, falhas nativas, exceções, consumo de memória e erros de exportação.
+- Testar comportamento térmico em sessões prolongadas; não prometer ausência de aquecimento.
+- Evitar tarefas em ciclo contínuo sem necessidade.
+- Operações pesadas devem poder ser canceladas quando for seguro.
+
+Antes do lançamento, criar um conjunto de projetos de referência: pequeno, médio, grande, muitos frames, muitas camadas, traços densos e imagens importadas. Registar dispositivo, versão Android, dimensões, FPS e resultados dos testes.
+
+---
+
+# 21. Segurança, privacidade e permissões
+
+- Projetos locais por padrão.
+- Não exigir conta para desenhar, guardar ou exportar localmente.
+- Não carregar desenhos para um servidor sem uma funcionalidade explícita e consentimento.
+- Pedir acesso a ficheiros através de mecanismos Android apropriados e apenas quando necessário.
+- Validar ficheiros importados e limitar dimensões/tamanhos.
+- Tratar projetos como entrada não confiável até validação.
+- Não executar conteúdo embutido em projetos.
+- Não guardar tokens ou segredos no repositório.
+- Não incluir imagens, nomes de ficheiros ou conteúdo artístico privado em registos de diagnóstico sem consentimento.
+- Se forem adicionados serviços remotos no futuro, documentar recolha, finalidade, retenção, eliminação e consentimento antes do lançamento.
+
+---
+
+# 22. Erros e recuperação de operações
+
+Todas as operações relevantes devem ter resultados claros de sucesso, falha ou cancelamento.
+
+Casos obrigatórios:
+- Falha ao guardar.
+- Espaço insuficiente.
+- Projeto inválido ou corrompido.
+- Versão de projeto não suportada.
+- Memória insuficiente durante importação/composição.
+- Formato de vídeo não suportado.
+- Falha de encoder.
+- Permissão de destino recusada.
+- Cancelamento pelo utilizador.
+- Perda de foco ou interrupção do sistema.
+- Falha de inicialização do motor nativo ou backend gráfico.
+
+O produto deve evitar mensagens técnicas incompreensíveis como única explicação. Detalhes técnicos podem ficar num diagnóstico opcional. Se uma operação falhar, o estado anterior deve continuar válido sempre que possível.
+
+---
+
+# 23. Testes e garantia de qualidade
+
+## 23.1 Testes unitários
+
+- Conversão de coordenadas com zoom/pan/rotação.
+- Operações de frame e reordenação.
+- Cálculo de FPS e duração.
+- Inserção sem sobrescrita.
+- Opacidade, visibilidade e ordem de camadas.
+- Referências a cenários partilhados.
+- Serialização e desserialização.
+- Migração de formato.
+- Histórico de desfazer/refazer.
+- Validação de dimensões e limites.
+- Composição e regras de exportação.
+
+## 23.2 Testes de integração
+
+- Kotlin ↔ JNI ↔ C++.
+- Criação de projeto, desenho, gravação, fecho e reabertura.
 - Frames independentes.
-- Camadas e cenários iniciais.
-- Timeline sincronizada com os dados reais.
+- Persistência de camadas e cenários.
+- Renderização após zoom/pan.
+- Miniaturas e cache.
+- Importação e exportação.
+- Recuperação após encerramento inesperado.
+- Compatibilidade com todas as ABIs declaradas como suportadas.
 
-### Fase 5 — Animação
+## 23.3 Testes de interface
+
+- Criar e abrir projetos.
+- Arrastar, ocultar e reabrir barras.
+- Alternar orientação.
+- Selecionar ferramentas.
+- Alterar cor.
+- Criar e navegar frames.
+- Expandir/recolher timeline.
+- Abrir e fechar painéis.
+- Exportar e lidar com falhas.
+- Acessibilidade básica dos controlos.
+
+## 23.4 Testes manuais em dispositivos
+
+Testar, no mínimo, os tipos de dispositivo disponíveis:
+- Telemóvel de gama baixa ou limitada.
+- Telemóvel de gama média.
+- Telemóvel de gama alta, se disponível.
+- Tablet, se disponível.
+- Dispositivo com stylus, se o suporte a stylus for anunciado.
+
+Se um tipo de dispositivo não estiver disponível para teste, documentar essa limitação em vez de afirmar que foi validado.
+
+## 23.5 Critérios de bloqueio de lançamento
+
+Não lançar como versão de produção se:
+- Há perda de desenhos em operações normais.
+- O autosave pode corromper o último projeto válido.
+- Barras podem desaparecer sem possibilidade de recuperação.
+- A exportação apresenta sucesso sem gerar um ficheiro válido.
+- A timeline mostra frames que não correspondem aos dados guardados.
+- Há falhas nativas frequentes ou ANRs reprodutíveis.
+- Permissões ou erros impedem o utilizador de recuperar o próprio trabalho sem explicação.
+
+---
+
+# 24. Compilação, integração contínua e distribuição
+
+## 24.1 Ambiente de build
+
+- Gradle/Android Gradle Plugin e JDK compatíveis, com versões fixadas e documentadas.
+- Kotlin, Compose, NDK e CMake em versões explicitamente definidas.
+- Dependências declaradas; evitar versões dinâmicas não reprodutíveis.
+- Segredos fora do código e dos logs.
+- Compilação local e em GitHub Actions com o mesmo conjunto de tarefas essenciais.
+
+## 24.2 GitHub Actions
+
+O pipeline deve:
+1. Obter o código.
+2. Preparar JDK e Android SDK/NDK/CMake requeridos.
+3. Validar o projeto.
+4. Executar testes unitários.
+5. Compilar as variantes pretendidas.
+6. Publicar artefactos de build com identificação clara.
+7. Falhar de forma explícita se uma etapa obrigatória falhar.
+
+APK de depuração serve para testes. A versão de produção deve ter assinatura de lançamento protegida, versionamento, notas de lançamento e verificações adequadas. Não guardar keystores ou palavras-passe no repositório.
+
+## 24.3 Versionamento
+
+- Código de versão monotónico.
+- Nome de versão legível.
+- Notas com funções adicionadas, problemas conhecidos e compatibilidade.
+- Identificar se o artefacto é debug, teste interno ou release.
+- Guardar ligação ao commit que produziu o artefacto.
+- Não chamar “produção” a uma compilação de debug.
+
+---
+
+# 25. Critérios de aceitação de produto completo
+
+Os requisitos seguintes são verificáveis. Cada item deve ter código, testes e evidência de execução antes de ser marcado como concluído.
+
+## 25.1 Projetos
+- [ ] Criar, abrir, renomear, duplicar e apagar projetos reais.
+- [ ] Mostrar miniaturas reais e metadados persistentes.
+- [ ] Guardar e recuperar projetos após fechar/reabrir a aplicação.
+- [ ] Tratar erros de armazenamento sem destruir o último estado válido.
+
+## 25.2 Folha e área de trabalho
+- [ ] A folha é branca por padrão e tem limites visíveis.
+- [ ] O espaço exterior é escuro.
+- [ ] Zoom/pan não alteram resolução nem conteúdo interno.
+- [ ] Coordenadas do traço continuam corretas depois de zoom, pan e mudança de orientação.
+- [ ] Existe comando para ajustar a folha à vista.
+
+## 25.3 Barras flutuantes
+- [ ] A barra superior flutua por cima da área de trabalho.
+- [ ] A barra de ferramentas flutua por cima da área de trabalho.
+- [ ] Nenhuma delas reserva permanentemente uma faixa ou coluna.
+- [ ] Ambas podem ser movidas, ocultadas e reabertas.
+- [ ] A posição é restaurada ou corrigida após mudança de orientação.
+- [ ] Mover a barra não desenha nem altera o projeto.
+- [ ] A forma de reabrir permanece acessível mesmo com ambas ocultas.
+
+## 25.4 Desenho
+- [ ] Pincel cria traços reais e persistentes.
+- [ ] Borracha altera apenas o conteúdo esperado.
+- [ ] Cor e tamanho afetam o resultado real.
+- [ ] Desfazer/refazer funciona de forma coerente.
+- [ ] O motor trata interrupções de entrada sem deixar estado inválido.
+
+## 25.5 Timeline e frames
+- [ ] Frames independentes preservam os seus desenhos.
+- [ ] Adicionar, duplicar, mover, inserir e apagar atualizam o estado persistente.
+- [ ] Colar como inserção não sobrescreve frames existentes.
+- [ ] FPS é distinto do número total de frames.
+- [ ] Timeline e Frame Viewer, quando disponíveis, refletem o mesmo projeto.
+- [ ] Reprodução respeita ordem, FPS e durações configuradas.
+
+## 25.6 Camadas, cenários e onion skin
+- [ ] Camadas podem ser selecionadas, renomeadas, reordenadas e ter visibilidade/opacidade alteradas.
+- [ ] Cenários partilhados e animados têm comportamento distinto e previsível.
+- [ ] Onion skin é apenas visual, não editável e não exportada.
+- [ ] Operações estruturais preservam a sincronização temporal.
+
+## 25.7 Importação e exportação
+- [ ] Importação valida formatos e mostra erros recuperáveis.
+- [ ] Exportação produz ficheiros válidos nos formatos anunciados.
+- [ ] Progresso, cancelamento e falta de espaço são tratados.
+- [ ] O vídeo exportado respeita FPS, intervalo, dimensões e câmara.
+- [ ] A saída não contém interface, seleção ou onion skin.
+
+## 25.8 Produção
+- [ ] Testes automatizados passam.
+- [ ] Build CI é reproduzível e produz artefactos identificados.
+- [ ] Assinatura de release é protegida.
+- [ ] Política de privacidade/permissões corresponde ao comportamento real.
+- [ ] Falhas críticas e perda de dados não têm problemas conhecidos sem mitigação.
+- [ ] A compatibilidade declarada corresponde aos dispositivos realmente testados.
+
+---
+
+# 26. Fases de implementação e gestão do trabalho
+
+Esta secção organiza o desenvolvimento; **não reduz o produto a um MVP**. O objetivo continua a ser a especificação integral acima. A ordem é para reduzir risco técnico e permitir testar as fundações antes de adicionar dependências.
+
+## Fase A — Fundação de produção
+- Estrutura Android, Kotlin/Compose, NDK/CMake e JNI.
+- Build reprodutível.
+- Modelo de projeto versionado.
+- Armazenamento e recuperação iniciais.
+- Testes automatizados básicos.
+
+## Fase B — Workspace e gestos
+- Área de trabalho de ecrã inteiro.
+- Folha branca com coordenadas próprias.
+- Zoom/pan.
+- Barras flutuantes, móveis, ocultáveis e persistentes.
+- Arbitragem central de gestos.
+- Testes de orientação e acessibilidade.
+
+## Fase C — Motor de desenho
+- Traços, pincel, borracha, cor.
+- Conversão de coordenadas.
+- Histórico.
+- Persistência e reabertura de arte real.
+- Perfil de desempenho.
+
+## Fase D — Modelo de animação
+- Frames independentes.
+- Timeline e miniaturas.
+- Camadas e cenários.
+- FPS, durações e reprodução.
 - Onion skin.
-- Reprodução e FPS.
-- Operações de frame e Frame Viewer.
 
-### Fase 6 — Ferramentas avançadas
-- Balde, laço, paletas, biblioteca de pincéis.
-- Importação de imagem e referência de vídeo.
+## Fase E — Ferramentas de produção
+- Preenchimento, laço, paletas e biblioteca de pincéis.
+- Operações em lote e Frame Viewer.
+- Flipbook.
 - Câmara e enquadramento.
 
-### Fase 7 — Exportação e otimização
-- Exportação de imagens e vídeo.
-- Testes de projetos grandes.
-- Perfil de CPU/GPU/memória e bateria.
-- Avaliação fundamentada de OpenGL ES e, se justificado, Vulkan.
+## Fase F — Animação avançada
+- Keyframes e interpolação.
+- Biblioteca de substituições.
+- Ferramentas adicionais e fluxos avançados.
+
+## Fase G — Media e entrega
+- Importação de imagem e vídeo.
+- Exportação de imagens, sequência, ZIP e vídeo.
+- Áudio, se aprovado e especificado em detalhe.
+- Otimização, compatibilidade e testes de carga.
+
+## Fase H — Preparação de lançamento
+- Auditoria de dados e recuperação.
+- Testes em dispositivos.
+- Testes de acessibilidade e permissões.
+- Verificação de builds de release.
+- Documentação de utilizador, notas de lançamento e lista de limitações conhecidas.
+
+A conclusão de uma fase não deve ser inferida apenas pela existência de classes ou botões. Os critérios de aceitação devem ser executados.
 
 ---
 
-## 18. Critérios de aceitação prioritários
+# 27. Regras de implementação e manutenção do repositório
 
-### Barras flutuantes
-- [ ] O canvas ocupa toda a área de trabalho disponível.
-- [ ] Mostrar a barra superior não encolhe nem desloca a folha.
-- [ ] Mostrar a barra de ferramentas não encolhe nem desloca a folha.
-- [ ] Ambas as barras podem ser arrastadas.
-- [ ] Ambas podem ser ocultadas e reabertas sem perder a ferramenta ativa.
-- [ ] As posições são preservadas ao reabrir o projeto, conforme as preferências.
-- [ ] A interface adapta-se a retrato e paisagem.
-- [ ] Mover uma barra não deixa uma área vazia reservada no layout.
-
-### Folha e desenho
-- [ ] A folha é branca por padrão e o espaço exterior é escuro.
-- [ ] Pinçar para ampliar/reduzir não muda a resolução do projeto.
-- [ ] O deslocamento move apenas a vista.
-- [ ] O desenho aparece nas coordenadas corretas da folha após zoom e deslocamento.
-- [ ] A barra flutuante não começa um traço por acidente.
-
-### Frames e projetos
-- [ ] Um frame conserva o desenho quando se navega para outro frame e se regressa.
-- [ ] Cada frame tem conteúdo independente.
-- [ ] Guardar e reabrir preserva frames, camadas, dimensões e FPS.
-- [ ] A timeline e o Frame Viewer, quando disponíveis, mostram o mesmo estado.
-- [ ] A exportação não inclui controlos da interface nem onion skin.
+- O repositório dedicado é `layouter787-source/Animation-Studio-`.
+- Não modificar outros repositórios do utilizador.
+- Não adicionar segredos, credenciais, keystores ou dados privados ao Git.
+- Evitar alterações destrutivas e preservar o histórico.
+- Cada alteração deve ter mensagem de commit que descreva o comportamento implementado.
+- Atualizar este documento quando requisitos forem alterados, sem marcar funcionalidades não implementadas como concluídas.
+- Manter um registo honesto do que foi implementado, testado, parcialmente suportado ou ainda planeado.
+- Não remover funcionalidades existentes sem avaliar impacto e sem autorização explícita.
+- Dependências externas devem ser revistas quanto a licença, manutenção, compatibilidade e tamanho.
+- Nunca incluir código ou assets de terceiros sem cumprir a respetiva licença.
 
 ---
 
-## 19. Estado real do repositório
+# 28. Referências técnicas
 
-O repositório contém uma base inicial Android com Kotlin/Compose, configuração nativa mínima e GitHub Actions para compilar um APK de depuração. A compilação inicial foi executada com sucesso.
-
-**A compilação bem-sucedida não significa que o estúdio completo esteja pronto.** O editor funcional, o armazenamento real, os frames independentes, a gestão de gestos das barras flutuantes, o motor de desenho, a reprodução e a exportação devem ser implementados e testados. Esta especificação é o contrato de produto para orientar esse trabalho.
-
----
-
-## 20. Referências úteis
-
-- Repositório Animation Studio: https://github.com/layouter787-source/Animation-Studio-
+- Repositório do produto: https://github.com/layouter787-source/Animation-Studio-
 - FlipaClip — Google Play: https://play.google.com/store/apps/details?id=com.vblast.flipaclip
 - FlipaClip — suporte: https://support.flipaclip.com/
+- Jetpack Compose: https://developer.android.com/compose
 - Android NDK: https://developer.android.com/ndk
 - JNI e desempenho: https://developer.android.com/training/articles/perf-jni
-- Jetpack Compose: https://developer.android.com/compose
+- AndroidX Ink: https://developer.android.com/jetpack/androidx/releases/ink
+- Google Ink — código e licença: https://github.com/google/ink
+- libmypaint — código e licença: https://github.com/mypaint/libmypaint
+
+As bibliotecas são opções a avaliar, não dependências automaticamente aprovadas. Confirmar APIs atuais, licença, dependências e compatibilidade Android antes de integrar.
 
 ---
 
-**Regra final:** dar prioridade à liberdade de desenho. A folha branca é o espaço de criação; as barras superior e de ferramentas são controlos flutuantes, móveis e ocultáveis, e nunca devem transformar-se em molduras fixas que roubem permanentemente área ao canvas.
+# 29. Regra final do produto
+
+**O Animation Studio deve ser um estúdio de animação 2D completo, não um protótipo.** A folha branca é o espaço de criação; o espaço exterior é escuro; as barras superior e de ferramentas são móveis, flutuantes e ocultáveis. Elas nunca devem tornar-se molduras fixas que roubem permanentemente área ao canvas. Os frames, camadas, cenários, ferramentas, reprodução, gravação e exportação devem operar sobre dados reais e persistentes. Uma funcionalidade só pode ser declarada pronta depois de implementada, testada e validada.
