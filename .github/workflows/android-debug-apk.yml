@@ -1,20 +1,32 @@
 name: Android Debug APK
 
 on:
-  workflow_dispatch:
+  # Build automatically for every branch, including Claude's working branch.
   push:
-    branches: [ "main" ]
+    branches:
+      - "**"
+  # Validate changes proposed for main, including every new commit pushed to the PR.
   pull_request:
-    branches: [ "main" ]
+    branches:
+      - main
+  # Allow a manual run from the Actions tab.
+  workflow_dispatch:
 
 permissions:
   contents: read
 
+concurrency:
+  group: android-build-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   build:
+    name: Compile, test and package debug APK
     runs-on: ubuntu-latest
+    timeout-minutes: 40
+
     steps:
-      - name: Checkout
+      - name: Checkout repository
         uses: actions/checkout@v4
 
       - name: Set up JDK 17
@@ -36,10 +48,13 @@ jobs:
         with:
           gradle-version: "8.9"
 
+      - name: Run unit tests
+        run: gradle --no-daemon testDebugUnitTest
+
       - name: Build debug APK
         run: gradle --no-daemon assembleDebug
 
-      - name: Upload APK
+      - name: Upload debug APK
         uses: actions/upload-artifact@v4
         with:
           name: animation-studio-debug-apk
