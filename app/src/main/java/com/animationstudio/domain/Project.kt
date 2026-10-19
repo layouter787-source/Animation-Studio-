@@ -62,10 +62,10 @@ data class Project(
                 it.copy(drawings = it.drawings + (existing.id to existing.copy(strokes = existing.strokes + stroke)))
             }
         }
-        val d = Drawing(nextId, listOf(stroke))
+        val fresh = Drawing(nextId, listOf(stroke))
         val targets = if (layer.kind == LayerKind.SCENERY) frameIds.filter { it !in layer.cels } else listOf(fid)
         return copy(nextId = nextId + 1).updateLayer(layerId) {
-            it.copy(drawings = it.drawings + (d.id to d), cels = it.cels + targets.associateWith { d.id })
+            it.copy(drawings = it.drawings + (fresh.id to fresh), cels = it.cels + targets.associateWith { fresh.id })
         }
     }
 
@@ -89,12 +89,15 @@ data class Project(
         var counter = nextId + 1
         val cur = currentFrameId
         val newLayers = layers.map { l ->
-            val src = l.drawingAt(cur) ?: return@map l
-            if (l.kind == LayerKind.SCENERY) {
+            val src = l.drawingAt(cur)
+            if (src == null) {
+                l
+            } else if (l.kind == LayerKind.SCENERY) {
                 l.copy(cels = l.cels + (newId to src.id))
             } else {
-                val copy = src.copy(id = counter++)
-                l.copy(drawings = l.drawings + (copy.id to copy), cels = l.cels + (newId to copy.id))
+                val dup = src.copy(id = counter)
+                counter += 1
+                l.copy(drawings = l.drawings + (dup.id to dup), cels = l.cels + (newId to dup.id))
             }
         }
         val ids = frameIds.toMutableList().apply { add(currentFrame + 1, newId) }
@@ -106,9 +109,9 @@ data class Project(
         val fid = currentFrameId
         val ids = frameIds.toMutableList().apply { removeAt(currentFrame) }
         val newLayers = layers.map { l ->
-            val cels = l.cels - fid
-            val used = cels.values.toSet()
-            l.copy(cels = cels, drawings = l.drawings.filterKeys { it in used })
+            val remaining = l.cels - fid
+            val used = remaining.values.toSet()
+            l.copy(cels = remaining, drawings = l.drawings.filterKeys { it in used })
         }
         return Project(ids, newLayers, currentFrame.coerceAtMost(ids.lastIndex), nextId)
     }
@@ -120,14 +123,14 @@ data class Project(
     fun separateSceneryFromCurrent(layerId: Long): Project {
         val layer = layers.firstOrNull { it.id == layerId && it.kind == LayerKind.SCENERY } ?: return this
         val old = layer.drawingAt(currentFrameId) ?: return this
-        val copy = old.copy(id = nextId)
+        val dup = old.copy(id = nextId)
         val remapped = layer.cels.toMutableMap()
         for (i in currentFrame until frameIds.size) {
             val fid = frameIds[i]
-            if (remapped[fid] == old.id) remapped[fid] = copy.id
+            if (remapped[fid] == old.id) remapped[fid] = dup.id
         }
         return copy(nextId = nextId + 1).updateLayer(layerId) {
-            it.copy(drawings = it.drawings + (copy.id to copy), cels = remapped)
+            it.copy(drawings = it.drawings + (dup.id to dup), cels = remapped)
         }
     }
 
@@ -139,7 +142,8 @@ data class Project(
         val name = if (kind == LayerKind.DRAWING) "Camada $n" else "Cenário $n"
         val layer = Layer(nextId, name, kind)
         val list = layers.toMutableList()
-        val idx = if (kind == LayerKind.SCENERY) list.indexOfFirst { it.kind == LayerKind.DRAWING }.let { if (it < 0) list.size else it } else list.size
+        val firstDrawing = list.indexOfFirst { it.kind == LayerKind.DRAWING }
+        val idx = if (kind == LayerKind.SCENERY) (if (firstDrawing < 0) list.size else firstDrawing) else list.size
         list.add(idx, layer)
         return copy(layers = list, nextId = nextId + 1)
     }
@@ -150,17 +154,22 @@ data class Project(
         if (i < 0) return this
         val src = layers[i]
         var counter = nextId + 1
-        val idMap = src.drawings.keys.associateWith { counter++ }
-        val copy = Layer(
+        val idMap = HashMap<Long, Long>()
+        for (oldId in src.drawings.keys) {
+            idMap[oldId] = counter
+            counter += 1
+        }
+        val dupLayer = Layer(
             id = nextId,
             name = "${src.name} cópia",
             kind = src.kind,
             opacityPercent = src.opacityPercent,
             visible = src.visible,
             drawings = src.drawings.values.associate { d -> idMap.getValue(d.id) to d.copy(id = idMap.getValue(d.id)) },
-            cels = src.cels.mapValues { (_, did) -> idMap.getValue(did) },
+            cels = src.cels.mapValues { entry -> idMap.getValue(entry.value) },
         )
-        val list = layers.toMutableList().apply { add(i + 1, copy) }
+        val list = layers.toMutableList()
+        list.add(i + 1, dupLayer)
         return copy(layers = list, nextId = counter)
     }
 
