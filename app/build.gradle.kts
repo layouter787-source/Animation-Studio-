@@ -42,6 +42,8 @@ android {
     }
     kotlinOptions {
         jvmTarget = "17"
+        // PointerInputChange.historical (traço suave com amostras intermédias) é API experimental do Compose UI.
+        freeCompilerArgs += listOf("-opt-in=androidx.compose.ui.ExperimentalComposeUiApi")
     }
 }
 
