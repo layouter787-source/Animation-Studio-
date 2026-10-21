@@ -3,7 +3,6 @@ package com.animationstudio.data
 import com.animationstudio.domain.BrushStroke
 import com.animationstudio.domain.Point
 import com.animationstudio.domain.Project
-import com.animationstudio.domain.addFrameAfterCurrentForTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
