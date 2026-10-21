@@ -70,6 +70,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.geometry.Size
@@ -95,9 +96,9 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
-import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
@@ -119,11 +120,10 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlin.math.hypot
 import kotlin.math.roundToInt
 
 internal enum class Tool { BRUSH, ERASER }
-
-private enum class ColorMethod(val label: String) { PALETTE("Paleta"), RGB("RGB"), HSB("HSB") }
 
 private sealed interface EditorDialog {
     data object Menu : EditorDialog
@@ -222,12 +222,6 @@ internal class EditorState(initial: Project) {
     }
 }
 
-private val Palette: List<Int> = listOf(
-    0xFF000000, 0xFF404040, 0xFF808080, 0xFFC0C0C0, 0xFFFFFFFF, 0xFF7A4A21, 0xFFB5651D, 0xFFE0B080,
-    0xFFFF0000, 0xFFFF6A00, 0xFFFFC000, 0xFFFFFF00, 0xFFA0E000, 0xFF00C000, 0xFF008060, 0xFF00C0C0,
-    0xFF00A0FF, 0xFF0050FF, 0xFF0000C0, 0xFF6000C0, 0xFFA000E0, 0xFFFF00FF, 0xFFFF0080, 0xFFFF9090,
-).map { it.toInt() }
-
 private fun DrawTransform.applyView(v: ViewTransform) {
     translate(v.tx, v.ty)
     rotate(v.rotationDegrees, Offset.Zero)
@@ -235,6 +229,37 @@ private fun DrawTransform.applyView(v: ViewTransform) {
 }
 
 private fun Offset.toPoint() = Point(x, y)
+
+/**
+ * Curva suave que passa por todos os pontos (spline Catmull-Rom convertida em Béziers cúbicos).
+ * O comprimento das alças é limitado a 1/3 do segmento, o que evita ondulações quando a amostragem do
+ * toque é irregular. A suavização por pontos médios deixava cantos (aspeto de "feito com régua").
+ */
+private fun smoothPath(pts: List<Point>): Path {
+    val path = Path()
+    path.moveTo(pts[0].x, pts[0].y)
+    val last = pts.size - 1
+    for (i in 0 until last) {
+        val p0 = pts[if (i > 0) i - 1 else 0]
+        val p1 = pts[i]
+        val p2 = pts[i + 1]
+        val p3 = pts[if (i + 2 <= last) i + 2 else last]
+        val seg = hypot(p2.x - p1.x, p2.y - p1.y)
+        if (seg == 0f) continue
+        val d0x = p2.x - p0.x
+        val d0y = p2.y - p0.y
+        val l0 = hypot(d0x, d0y)
+        val d3x = p3.x - p1.x
+        val d3y = p3.y - p1.y
+        val l3 = hypot(d3x, d3y)
+        val c1x = if (l0 > 0f) p1.x + d0x / l0 * seg / 3f else p1.x
+        val c1y = if (l0 > 0f) p1.y + d0y / l0 * seg / 3f else p1.y
+        val c2x = if (l3 > 0f) p2.x - d3x / l3 * seg / 3f else p2.x
+        val c2y = if (l3 > 0f) p2.y - d3y / l3 * seg / 3f else p2.y
+        path.cubicTo(c1x, c1y, c2x, c2y, p2.x, p2.y)
+    }
+    return path
+}
 
 private fun DrawScope.drawBrushStroke(s: BrushStroke) {
     val color = Color(s.colorArgb)
@@ -245,15 +270,7 @@ private fun DrawScope.drawBrushStroke(s: BrushStroke) {
         drawCircle(color, s.width / 2f, Offset(pts[0].x, pts[0].y), blendMode = blend)
         return
     }
-    val path = Path()
-    path.moveTo(pts[0].x, pts[0].y)
-    for (i in 1 until pts.size) {
-        val a = pts[i - 1]
-        val b = pts[i]
-        path.quadraticBezierTo(a.x, a.y, (a.x + b.x) / 2f, (a.y + b.y) / 2f)
-    }
-    path.lineTo(pts.last().x, pts.last().y)
-    drawPath(path, color, style = Stroke(width = s.width, cap = StrokeCap.Round, join = StrokeJoin.Round), blendMode = blend)
+    drawPath(smoothPath(pts), color, style = Stroke(width = s.width, cap = StrokeCap.Round, join = StrokeJoin.Round), blendMode = blend)
 }
 
 private suspend fun persist(store: ProjectStore, meta: ProjectMeta, fps: Int, project: Project): Boolean =
@@ -341,7 +358,8 @@ fun AnimationEditor(meta: ProjectMeta, initial: Project, store: ProjectStore, on
                         toast("Reprodução: " + when (st.playMode) { PlayMode.ONCE -> "uma vez"; PlayMode.LOOP -> "loop"; PlayMode.PING_PONG -> "ping-pong" })
                     },
                 )
-                Box(Modifier.weight(1f).fillMaxHeight().onSizeChanged { canvasSize = it }) {
+                // clipToBounds: a folha (com zoom/rotação) nunca pode desenhar por cima das barras.
+                Box(Modifier.weight(1f).fillMaxHeight().clipToBounds().onSizeChanged { canvasSize = it }) {
                     // Folha branca sobre o espaço de trabalho escuro.
                     Canvas(Modifier.fillMaxSize()) {
                         val v = st.view
@@ -455,7 +473,7 @@ fun AnimationEditor(meta: ProjectMeta, initial: Project, store: ProjectStore, on
             MenuItem("Adicionar cenário") { st.addLayer(LayerKind.SCENERY); dialog = null }
             MenuItem("Voltar aos projetos") { dialog = null; close() }
         }
-        is EditorDialog.ColorPicker -> ColorDialog(
+        is EditorDialog.ColorPicker -> ColorPickerDialog(
             initialMethod = d.method, initial = st.colorArgb, recents = st.recentColors,
             onConfirm = { c ->
                 st.colorArgb = c
@@ -618,16 +636,17 @@ private fun TopBar(
         Spacer(Modifier.width(6.dp))
         // Painel de cor: amostra + métodos (paleta, RGB, HSB)
         Row(verticalAlignment = Alignment.CenterVertically) {
-            Box(
-                Modifier.size(width = 46.dp, height = 34.dp).clip(RoundedCornerShape(8.dp)).background(Color(st.colorArgb))
-                    .border(2.dp, StudioColors.Ink, RoundedCornerShape(8.dp)).clickable { onColor(ColorMethod.PALETTE) }
+            CheckerBox(
+                Color(st.colorArgb),
+                Modifier.size(width = 46.dp, height = 34.dp).clip(RoundedCornerShape(8.dp))
+                    .border(2.dp, StudioColors.Ink, RoundedCornerShape(8.dp)).clickable { onColor(ColorMethod.DISC) }
             )
             Spacer(Modifier.width(4.dp))
             ToolCell(width = 32.dp, height = 34.dp, onClick = { onColor(ColorMethod.PALETTE) }) { PaletteGlyph(it) }
             Spacer(Modifier.width(3.dp))
             ToolCell(width = 32.dp, height = 34.dp, onClick = { onColor(ColorMethod.RGB) }) { RgbGlyph(it) }
             Spacer(Modifier.width(3.dp))
-            ToolCell(width = 32.dp, height = 34.dp, onClick = { onColor(ColorMethod.HSB) }) { HsbGlyph() }
+            ToolCell(width = 32.dp, height = 34.dp, onClick = { onColor(ColorMethod.DISC) }) { HsbGlyph() }
         }
     }
 }
@@ -810,92 +829,4 @@ private fun LayerOptionsDialog(
         if (canSeparate) TextButton(onClick = onSeparate) { Text("Separar a partir deste frame") }
         if (canDelete) TextButton(onClick = onDelete) { Text("Apagar", color = Color(0xFFFF8A80)) }
     }
-}
-
-@Composable
-private fun ColorDialog(
-    initialMethod: ColorMethod,
-    initial: Int,
-    recents: List<Int>,
-    onConfirm: (Int) -> Unit,
-    onDismiss: () -> Unit,
-) {
-    var method by remember { mutableStateOf(initialMethod) }
-    var color by remember { mutableIntStateOf(initial or (0xFF shl 24)) }
-    StudioDialog("Cor", onDismiss, "OK", { onConfirm(color) }) {
-        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            for (m in ColorMethod.values()) {
-                Box(
-                    Modifier.clip(RoundedCornerShape(8.dp))
-                        .background(if (m == method) StudioColors.Cream else StudioColors.PanelLight)
-                        .clickable { method = m }.padding(horizontal = 12.dp, vertical = 6.dp)
-                ) { Text(m.label, color = if (m == method) Color.Black else StudioColors.Ink, fontSize = 13.sp) }
-            }
-        }
-        Spacer(Modifier.height(8.dp))
-        Row(verticalAlignment = Alignment.Top) {
-            Box(Modifier.size(64.dp).clip(RoundedCornerShape(10.dp)).background(Color(color)).border(2.dp, StudioColors.Ink, RoundedCornerShape(10.dp)))
-            Spacer(Modifier.width(10.dp))
-            Column(Modifier.weight(1f)) {
-                when (method) {
-                    ColorMethod.PALETTE -> PaletteGrid(recents) { color = it }
-                    ColorMethod.RGB -> RgbSliders(color) { color = it }
-                    ColorMethod.HSB -> HsbSliders(color) { color = it }
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun Swatch(c: Int, onClick: () -> Unit) {
-    Box(
-        Modifier.size(26.dp).clip(RoundedCornerShape(6.dp)).background(Color(c))
-            .border(1.dp, StudioColors.Ink.copy(alpha = 0.3f), RoundedCornerShape(6.dp)).clickable(onClick = onClick)
-    )
-}
-
-@Composable
-private fun PaletteGrid(recents: List<Int>, onPick: (Int) -> Unit) {
-    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-        if (recents.isNotEmpty()) {
-            Text("Recentes", color = StudioColors.Ink.copy(alpha = 0.7f), fontSize = 11.sp)
-            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) { for (c in recents.take(8)) Swatch(c) { onPick(c) } }
-        }
-        for (row in Palette.chunked(8)) {
-            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) { for (c in row) Swatch(c) { onPick(c) } }
-        }
-    }
-}
-
-@Composable
-private fun ChannelSlider(label: String, value: Float, max: Float, shown: String, onChange: (Float) -> Unit) {
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        Text(label, color = StudioColors.Ink, fontSize = 12.sp, modifier = Modifier.width(18.dp))
-        Slider(value = value, onValueChange = onChange, valueRange = 0f..max, modifier = Modifier.weight(1f))
-        Text(shown, color = StudioColors.Ink, fontSize = 12.sp, modifier = Modifier.width(34.dp))
-    }
-}
-
-@Composable
-private fun RgbSliders(initial: Int, onChange: (Int) -> Unit) {
-    var r by remember { mutableFloatStateOf(((initial shr 16) and 0xFF).toFloat()) }
-    var g by remember { mutableFloatStateOf(((initial shr 8) and 0xFF).toFloat()) }
-    var b by remember { mutableFloatStateOf((initial and 0xFF).toFloat()) }
-    fun push() = onChange((0xFF shl 24) or (r.roundToInt() shl 16) or (g.roundToInt() shl 8) or b.roundToInt())
-    ChannelSlider("R", r, 255f, r.roundToInt().toString()) { r = it; push() }
-    ChannelSlider("G", g, 255f, g.roundToInt().toString()) { g = it; push() }
-    ChannelSlider("B", b, 255f, b.roundToInt().toString()) { b = it; push() }
-}
-
-@Composable
-private fun HsbSliders(initial: Int, onChange: (Int) -> Unit) {
-    val hsv = remember { FloatArray(3).also { android.graphics.Color.colorToHSV(initial, it) } }
-    var h by remember { mutableFloatStateOf(hsv[0]) }
-    var s by remember { mutableFloatStateOf(hsv[1]) }
-    var v by remember { mutableFloatStateOf(hsv[2]) }
-    fun push() = onChange(android.graphics.Color.HSVToColor(floatArrayOf(h, s, v)))
-    ChannelSlider("H", h, 360f, h.roundToInt().toString()) { h = it; push() }
-    ChannelSlider("S", s, 1f, (s * 100).roundToInt().toString()) { s = it; push() }
-    ChannelSlider("B", v, 1f, (v * 100).roundToInt().toString()) { v = it; push() }
 }
