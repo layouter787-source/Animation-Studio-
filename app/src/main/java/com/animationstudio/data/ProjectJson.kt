@@ -2,6 +2,7 @@ package com.animationstudio.data
 
 import com.animationstudio.domain.BrushStroke
 import com.animationstudio.domain.Drawing
+import com.animationstudio.domain.FillRegion
 import com.animationstudio.domain.Layer
 import com.animationstudio.domain.LayerKind
 import com.animationstudio.domain.Point
@@ -51,19 +52,7 @@ object ProjectJson {
                 val dobj = JSONObject()
                 dobj.put("id", d.id)
                 val ss = JSONArray()
-                for (s in d.strokes) {
-                    val so = JSONObject()
-                    so.put("c", s.colorArgb)
-                    so.put("w", s.width.toDouble())
-                    so.put("e", s.erase)
-                    val pts = JSONArray()
-                    for (pt in s.points) {
-                        pts.put(pt.x.toDouble())
-                        pts.put(pt.y.toDouble())
-                    }
-                    so.put("p", pts)
-                    ss.put(so)
-                }
+                for (s in d.strokes) ss.put(encodeStroke(s))
                 dobj.put("strokes", ss)
                 ds.put(dobj)
             }
@@ -80,6 +69,56 @@ object ProjectJson {
         }
         root.put("layers", layers)
         return root.toString()
+    }
+
+    private fun encodeStroke(s: BrushStroke): JSONObject {
+        val so = JSONObject()
+        so.put("c", s.colorArgb)
+        so.put("w", s.width.toDouble())
+        so.put("e", s.erase)
+        so.put("t", s.taper.toDouble())
+        so.put("k", s.hardness.toDouble())
+        val pts = JSONArray()
+        for (pt in s.points) {
+            pts.put(pt.x.toDouble())
+            pts.put(pt.y.toDouble())
+        }
+        so.put("p", pts)
+        val f = s.fill
+        if (f != null) {
+            val fo = JSONObject()
+            fo.put("x", f.x)
+            fo.put("y", f.y)
+            fo.put("w", f.w)
+            fo.put("h", f.h)
+            fo.put("u", f.unit.toDouble())
+            val ra = JSONArray()
+            for (r in f.runs) ra.put(r)
+            fo.put("r", ra)
+            so.put("f", fo)
+        }
+        return so
+    }
+
+    private fun decodeStroke(so: JSONObject): BrushStroke {
+        val pa = so.getJSONArray("p")
+        val pts = List(pa.length() / 2) { k -> Point(pa.getDouble(2 * k).toFloat(), pa.getDouble(2 * k + 1).toFloat()) }
+        var fill: FillRegion? = null
+        if (so.has("f")) {
+            val fo = so.getJSONObject("f")
+            val ra = fo.getJSONArray("r")
+            val runs = List(ra.length()) { ra.getInt(it) }
+            fill = FillRegion(fo.getInt("x"), fo.getInt("y"), fo.getInt("w"), fo.getInt("h"), fo.getDouble("u").toFloat(), runs)
+        }
+        return BrushStroke(
+            points = pts,
+            colorArgb = so.getInt("c"),
+            width = so.getDouble("w").toFloat(),
+            erase = so.getBoolean("e"),
+            fill = fill,
+            taper = if (so.has("t")) so.getDouble("t").toFloat() else 0.6f,
+            hardness = if (so.has("k")) so.getDouble("k").toFloat() else 1f,
+        )
     }
 
     fun decodeMeta(text: String): ProjectMeta? = try {
@@ -120,12 +159,7 @@ object ProjectJson {
         for (i in 0 until da.length()) {
             val dobj = da.getJSONObject(i)
             val sa = dobj.getJSONArray("strokes")
-            val strokes = List(sa.length()) { si ->
-                val so = sa.getJSONObject(si)
-                val pa = so.getJSONArray("p")
-                val pts = List(pa.length() / 2) { k -> Point(pa.getDouble(2 * k).toFloat(), pa.getDouble(2 * k + 1).toFloat()) }
-                BrushStroke(pts, so.getInt("c"), so.getDouble("w").toFloat(), so.getBoolean("e"))
-            }
+            val strokes = List(sa.length()) { si -> decodeStroke(sa.getJSONObject(si)) }
             val id = dobj.getLong("id")
             drawings[id] = Drawing(id, strokes)
         }
