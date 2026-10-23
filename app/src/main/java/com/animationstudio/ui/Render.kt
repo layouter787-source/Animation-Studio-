@@ -25,25 +25,32 @@ import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.LayoutDirection
 import com.animationstudio.domain.BrushKind
+import com.animationstudio.domain.BrushLibrary
+import com.animationstudio.domain.BrushPreset
 import com.animationstudio.domain.BrushStroke
 import com.animationstudio.domain.FillRegion
 import com.animationstudio.domain.LayerKind
 import com.animationstudio.domain.Point
 import com.animationstudio.domain.Project
+import com.animationstudio.domain.Stamp
+import com.animationstudio.domain.StampGeometry
+import com.animationstudio.domain.StampShape
 import com.animationstudio.domain.StrokeGeometry
 import com.animationstudio.domain.bounds
 import androidx.compose.ui.graphics.Canvas as GfxCanvas
 import kotlin.math.PI
+import kotlin.math.cos
+import kotlin.math.max
 import kotlin.math.roundToInt
 import kotlin.math.sin
 
 // ---------------------------------------------------------------------------------------------
-// Traços de tinta: corpo uniforme + pontas afiladas; bordas suaves por passagens empilhadas.
+// Traços: contínuos (corpo + pontas afiladas + bordas suaves) ou por carimbos (textura, plantas, luz).
 // ---------------------------------------------------------------------------------------------
 
 private class InkPass(val width: Float, val alpha: Float, val body: Path?, val polys: List<Path>, val tips: List<Pair<Offset, Float>>)
 
-private class InkRender(val passes: List<InkPass>)
+private class InkRender(val passes: List<InkPass>, val stampBuckets: List<Pair<Float, Path>>?)
 
 private fun polyPath(poly: List<Point>): Path {
     val p = Path()
@@ -82,9 +89,63 @@ private fun buildPass(s: BrushStroke, width: Float, alpha: Float): InkPass {
     return InkPass(width, alpha, body, polys, tips)
 }
 
+private fun addStamp(path: Path, shape: StampShape, st: Stamp) {
+    val c = cos(st.rotation)
+    val sn = sin(st.rotation)
+    fun wx(lx: Float, ly: Float) = st.x + lx * c - ly * sn
+    fun wy(lx: Float, ly: Float) = st.y + lx * sn + ly * c
+    val r = st.size / 2f
+    when (shape) {
+        StampShape.GRAIN, StampShape.DOT -> path.addOval(Rect(st.x - r, st.y - r, st.x + r, st.y + r))
+        StampShape.STAR -> {
+            for (i in 0 until 8) {
+                val ang = i * (PI.toFloat() / 4f)
+                val rad = if (i % 2 == 0) r else r * 0.3f
+                val lx = cos(ang) * rad
+                val ly = sin(ang) * rad
+                if (i == 0) path.moveTo(wx(lx, ly), wy(lx, ly)) else path.lineTo(wx(lx, ly), wy(lx, ly))
+            }
+            path.close()
+        }
+        StampShape.LEAF -> {
+            val len = st.size
+            val wid = st.size * 0.28f
+            path.moveTo(wx(0f, 0f), wy(0f, 0f))
+            path.quadraticTo(wx(len * 0.5f, wid), wy(len * 0.5f, wid), wx(len, 0f), wy(len, 0f))
+            path.quadraticTo(wx(len * 0.5f, -wid), wy(len * 0.5f, -wid), wx(0f, 0f), wy(0f, 0f))
+            path.close()
+        }
+        StampShape.GRASS -> {
+            val hgt = st.size
+            val base = max(1f, st.size * 0.07f)
+            val bend = hgt * 0.25f
+            path.moveTo(wx(0f, -base), wy(0f, -base))
+            path.quadraticTo(wx(hgt * 0.55f, -base * 0.4f + bend), wy(hgt * 0.55f, -base * 0.4f + bend), wx(hgt, bend * 1.4f), wy(hgt, bend * 1.4f))
+            path.quadraticTo(wx(hgt * 0.55f, base * 0.4f + bend), wy(hgt * 0.55f, base * 0.4f + bend), wx(0f, base), wy(0f, base))
+            path.close()
+        }
+        StampShape.NONE -> {}
+    }
+}
+
+private fun buildStamps(s: BrushStroke, preset: BrushPreset): List<Pair<Float, Path>> {
+    val first = s.points.firstOrNull()
+    val seed = if (first == null) 0 else (first.x * 131f).toInt() * 31 + (first.y * 131f).toInt()
+    val low = Path()
+    val mid = Path()
+    val high = Path()
+    for (st in StampGeometry.generate(s.points, s.width, preset, seed)) {
+        val target = if (st.alpha < 0.5f) low else if (st.alpha < 0.8f) mid else high
+        addStamp(target, preset.stamp, st)
+    }
+    return listOf(0.4f to low, 0.7f to mid, 1f to high)
+}
+
 private fun buildInk(s: BrushStroke): InkRender {
+    val preset = if (s.brush.isNotEmpty()) BrushLibrary.byIdOrNull(s.brush) else null
+    if (preset != null && preset.stamp != StampShape.NONE) return InkRender(emptyList(), buildStamps(s, preset))
     val h = s.hardness.coerceIn(0f, 1f)
-    if (h > 0.95f) return InkRender(listOf(buildPass(s, s.width, 1f)))
+    if (h > 0.95f) return InkRender(listOf(buildPass(s, s.width, 1f)), null)
     val core = s.width * (0.4f + 0.6f * h)
     val span = s.width - core
     return InkRender(
@@ -93,7 +154,8 @@ private fun buildInk(s: BrushStroke): InkRender {
             buildPass(s, core + span * 0.66f, 0.2f),
             buildPass(s, core + span * 0.33f, 0.3f),
             buildPass(s, core, 1f),
-        )
+        ),
+        null,
     )
 }
 
@@ -107,10 +169,19 @@ private fun DrawScope.drawPass(p: InkPass, rgb: Color, blend: BlendMode) {
     for (t in p.tips) drawCircle(c, t.second, t.first, blendMode = blend)
 }
 
+private fun DrawScope.drawRender(r: InkRender, rgb: Color, blend: BlendMode) {
+    val buckets = r.stampBuckets
+    if (buckets != null) {
+        for (b in buckets) drawPath(b.second, rgb.copy(alpha = b.first), blendMode = blend)
+    } else {
+        for (p in r.passes) drawPass(p, rgb, blend)
+    }
+}
+
 /**
  * Desenha um traço. A opacidade vem do alfa da cor; a borracha usa DstOut (apaga proporcionalmente ao alfa).
- * Com opacidade < 100% as peças são desenhadas opacas numa camada e a camada recebe o alfa, para não
- * escurecer onde as peças se sobrepõem.
+ * Com opacidade < 100% ou modo "dentro"/"por trás" as peças são desenhadas opacas numa camada e a camada
+ * é composta com o alfa e o modo, para não escurecer onde as peças se sobrepõem.
  */
 internal fun DrawScope.drawInk(s: BrushStroke, tint: Color?, useCache: Boolean) {
     if (s.points.isEmpty()) return
@@ -119,18 +190,24 @@ internal fun DrawScope.drawInk(s: BrushStroke, tint: Color?, useCache: Boolean) 
     val source = tint ?: Color(s.colorArgb)
     val alpha = source.alpha
     val rgb = if (s.erase) Color.Black else source.copy(alpha = 1f)
-    val blend = if (s.erase) BlendMode.DstOut else BlendMode.SrcOver
-    if (alpha >= 0.999f) {
-        for (p in render.passes) drawPass(p, rgb, blend)
+    val layerBlend = when {
+        s.erase -> BlendMode.DstOut
+        s.mode == 1 -> BlendMode.SrcAtop
+        s.mode == 2 -> BlendMode.DstOver
+        else -> BlendMode.SrcOver
+    }
+    val needLayer = alpha < 0.999f || (!s.erase && s.mode != 0)
+    if (!needLayer) {
+        drawRender(render, rgb, if (s.erase) BlendMode.DstOut else BlendMode.SrcOver)
         return
     }
     val b = s.bounds() ?: return
     val pad = s.width + 2f
     val paint = Paint()
     paint.alpha = alpha
-    paint.blendMode = blend
+    paint.blendMode = layerBlend
     drawContext.canvas.saveLayer(Rect(b.minX - pad, b.minY - pad, b.maxX + pad, b.maxY + pad), paint)
-    for (p in render.passes) drawPass(p, rgb, BlendMode.SrcOver)
+    drawRender(render, rgb, BlendMode.SrcOver)
     drawContext.canvas.restore()
 }
 
@@ -253,20 +330,18 @@ internal fun renderComposite(
     return bmp
 }
 
-/** Pré-visualização de um pincel/borracha: uma onda desenhada com os parâmetros indicados. */
-internal fun DrawScope.drawBrushSample(kind: BrushKind, width: Float, opacity: Float, taper: Float, hardness: Float, ink: Color) {
+/** Pré-visualização de um pincel/borracha: uma onda desenhada com a predefinição indicada. */
+internal fun DrawScope.drawBrushSample(preset: BrushPreset, width: Float, opacity: Float, ink: Color) {
     val w = size.width
     val h = size.height
-    val pad = h * 0.32f
+    val pad = h * 0.3f
     val pts = List(48) { i ->
         val t = i / 47f
         Point(pad + t * (w - 2f * pad), h / 2f + sin(t * 2f * PI.toFloat()) * h * 0.2f)
     }
     val wd = width.coerceIn(1f, h * 0.5f)
-    if (kind == BrushKind.ERASER) {
-        drawRect(StudioColors.Accent.copy(alpha = 0.85f))
-        drawInk(BrushStroke(pts, Color.Black.copy(alpha = opacity).toArgb(), wd, true, null, taper, hardness), null, false)
-    } else {
-        drawInk(BrushStroke(pts, ink.copy(alpha = opacity).toArgb(), wd, false, null, taper, hardness), null, false)
-    }
+    val erase = preset.kind == BrushKind.ERASER
+    if (erase) drawRect(StudioColors.Accent.copy(alpha = 0.85f))
+    val argb = if (erase) Color.Black.copy(alpha = opacity).toArgb() else ink.copy(alpha = opacity).toArgb()
+    drawInk(BrushStroke(pts, argb, wd, erase, null, preset.taper, preset.hardness, preset.id, 0), null, false)
 }
