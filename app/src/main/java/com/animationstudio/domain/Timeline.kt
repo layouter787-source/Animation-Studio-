@@ -9,8 +9,12 @@ data class BrushStroke(
     val fill: FillRegion? = null,
     /** 0 = espessura uniforme; 1 = pontas muito afiladas. */
     val taper: Float = 0.6f,
-    /** 1 = borda nítida; valores baixos = borda suave (aerografo). */
+    /** 1 = borda nítida; valores baixos = borda suave (aerógrafo). */
     val hardness: Float = 1f,
+    /** Id da predefinição (estilo de carimbo/textura). Vazio = traço contínuo. */
+    val brush: String = "",
+    /** 0 = normal, 1 = só dentro do desenho existente, 2 = por trás do desenho existente. */
+    val mode: Int = 0,
 ) {
     /** Cache de renderização da UI. Não entra em equals/hashCode/copy. */
     var renderCache: Any? = null

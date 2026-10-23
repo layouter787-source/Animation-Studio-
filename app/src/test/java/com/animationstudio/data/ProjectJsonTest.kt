@@ -16,7 +16,7 @@ class ProjectJsonTest {
         val sc = p.layers[0].id
         val dl = p.layers[1].id
         val fill = BrushStroke(emptyList(), 0x80336699.toInt(), 0f, fill = FillRegion.encode(booleanArrayOf(true, false, true, true), 2, 2, 3, 4, 1f))
-        p = p.addStroke(sc, BrushStroke(listOf(Point(0.1f, 2.5f), Point(100f, 200.25f)), 0xFF112233.toInt(), 3.5f, taper = 0.25f, hardness = 0.5f))
+        p = p.addStroke(sc, BrushStroke(listOf(Point(0.1f, 2.5f), Point(100f, 200.25f)), 0xFF112233.toInt(), 3.5f, taper = 0.25f, hardness = 0.5f, brush = "grass", mode = 2))
             .addStroke(dl, BrushStroke(listOf(Point(1f, 1f)), 0x80FF0000.toInt(), 9f, erase = true))
             .addFill(dl, fill)
             .addFrameAfterCurrent()

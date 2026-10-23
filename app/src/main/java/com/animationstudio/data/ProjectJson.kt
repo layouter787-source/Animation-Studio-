@@ -78,6 +78,8 @@ object ProjectJson {
         so.put("e", s.erase)
         so.put("t", s.taper.toDouble())
         so.put("k", s.hardness.toDouble())
+        if (s.brush.isNotEmpty()) so.put("b", s.brush)
+        if (s.mode != 0) so.put("m", s.mode)
         val pts = JSONArray()
         for (pt in s.points) {
             pts.put(pt.x.toDouble())
@@ -118,6 +120,8 @@ object ProjectJson {
             fill = fill,
             taper = if (so.has("t")) so.getDouble("t").toFloat() else 0.6f,
             hardness = if (so.has("k")) so.getDouble("k").toFloat() else 1f,
+            brush = if (so.has("b")) so.getString("b") else "",
+            mode = if (so.has("m")) so.getInt("m") else 0,
         )
     }
 
