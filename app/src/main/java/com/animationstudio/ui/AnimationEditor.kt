@@ -54,6 +54,8 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.clipRect
 import androidx.compose.ui.graphics.drawscope.withTransform
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.pointer.PointerInputChange
+import androidx.compose.ui.input.pointer.PointerType
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.positionChanged
 import androidx.compose.ui.layout.onSizeChanged
@@ -64,7 +66,7 @@ import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import com.animationstudio.data.ProjectMeta
 import com.animationstudio.data.ProjectStore
-import com.animationstudio.domain.BrushKind
+import com.animationstudio.domain.BrushLibrary
 import com.animationstudio.domain.LayerKind
 import com.animationstudio.domain.PlayMode
 import com.animationstudio.domain.Point
@@ -74,7 +76,9 @@ import com.animationstudio.domain.ViewTransform
 import com.animationstudio.domain.addFill
 import com.animationstudio.domain.frameClip
 import com.animationstudio.domain.insertFrameAt
+import com.animationstudio.domain.moveLayer
 import com.animationstudio.domain.nextPlaybackStep
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -85,12 +89,17 @@ import kotlin.math.roundToInt
 private sealed interface EditorDialog {
     data object Menu : EditorDialog
     data class ColorPicker(val method: ColorMethod) : EditorDialog
-    data class Plus(val layerId: Long) : EditorDialog
+    data object AddLayer : EditorDialog
     data class LayerOptions(val layerId: Long) : EditorDialog
-    data class FrameOptions(val index: Int) : EditorDialog
-    data class BrushTool(val tool: Tool) : EditorDialog
+    data class FrameActions(val index: Int) : EditorDialog
+    data class BrushLibrary(val tool: Tool) : EditorDialog
+    data class BrushSettings(val tool: Tool) : EditorDialog
+    data object BucketSettings : EditorDialog
     data object FpsEdit : EditorDialog
     data object Onion : EditorDialog
+    data object Grid : EditorDialog
+    data object Resolution : EditorDialog
+    data object Organize : EditorDialog
 }
 
 private fun DrawTransform.applyView(v: ViewTransform) {
@@ -106,6 +115,8 @@ private fun selTransform(pivot: Offset, dx: Float, dy: Float, deg: Float, scale:
 }
 
 private fun Offset.toPoint() = Point(x, y)
+
+private fun isPen(c: PointerInputChange): Boolean = c.type == PointerType.Stylus || c.type == PointerType.Eraser
 
 private suspend fun persist(store: ProjectStore, meta: ProjectMeta, fps: Int, project: Project): Boolean =
     withContext(Dispatchers.IO) {
@@ -127,71 +138,108 @@ private fun OverlayChip(
     modifier: Modifier = Modifier,
     selected: Boolean = false,
     danger: Boolean = false,
-    onLongClick: (() -> Unit)? = null,
     onClick: () -> Unit,
 ) {
-    val shape = RoundedCornerShape(10.dp)
+    val shape = RoundedCornerShape(9.dp)
     Box(
         modifier.clip(shape)
-            .background(if (selected) StudioColors.Accent else StudioColors.Surface.copy(alpha = 0.92f))
+            .background(if (selected) StudioColors.Accent else StudioColors.Surface.copy(alpha = 0.94f))
             .border(1.dp, if (selected) StudioColors.Accent else StudioColors.Outline, shape)
-            .combinedClickable(onClick = onClick, onLongClick = onLongClick)
-            .padding(horizontal = 11.dp, vertical = 7.dp),
+            .combinedClickable(onClick = onClick)
+            .padding(horizontal = 10.dp, vertical = 6.dp),
         contentAlignment = Alignment.Center,
     ) {
-        Text(text, style = StudioType.Label.copy(color = if (danger) StudioColors.Danger else Color.White))
+        Text(text, style = StudioType.Label.copy(fontSize = 11.sp, color = if (danger) StudioColors.Danger else Color.White))
     }
 }
 
 @Composable
 fun AnimationEditor(meta: ProjectMeta, initial: Project, store: ProjectStore, onClose: () -> Unit) {
-    val st = remember { EditorState(initial) }
+    val context = LocalContext.current
+    val prefs = remember { Prefs(context) }
+    val st = remember {
+        EditorState(initial).also {
+            it.penOnly = prefs.penOnly
+            it.palmReject = prefs.palmReject
+            it.timelineBottom = prefs.timelineBottom
+            it.toolsRight = prefs.toolsRight
+            it.stabilizer = prefs.stabilizer
+        }
+    }
     var fps by remember { mutableIntStateOf(meta.fps) }
+    var sheetW by remember { mutableIntStateOf(meta.width) }
+    var sheetH by remember { mutableIntStateOf(meta.height) }
     var expanded by remember { mutableStateOf(false) }
     var topBarHeightPx by remember { mutableIntStateOf(0) }
     var canvasSize by remember { mutableStateOf(IntSize.Zero) }
     var dialog by remember { mutableStateOf<EditorDialog?>(null) }
-    val context = LocalContext.current
     val scope = rememberCoroutineScope()
-    val sw = meta.width.toFloat()
-    val sh = meta.height.toFloat()
+    val sw = sheetW.toFloat()
+    val sh = sheetH.toFloat()
+    val curMeta = meta.copy(width = sheetW, height = sheetH)
     val baseName = remember(meta.name) { meta.name.replace(Regex("[^A-Za-z0-9_-]"), "_").ifBlank { "animacao" } }
 
     fun toast(msg: String) = Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
     fun soon(what: String) = toast("$what: em desenvolvimento")
     fun close() {
         scope.launch {
-            if (!persist(store, meta, fps, st.project)) toast("Não foi possível guardar o projeto")
+            if (!persist(store, curMeta, fps, st.project)) toast("Não foi possível guardar o projeto")
             onClose()
+        }
+    }
+
+    // Balde: corre fora da thread principal. (A causa do erro anterior: o pedido era reposto a null dentro
+    // do próprio efeito que o observava, o que cancelava o trabalho e mostrava "não foi possível preencher".)
+    fun requestFill(p: Point) {
+        if (st.busyFill) return
+        val snapshot = st.project
+        val layer = snapshot.layers.firstOrNull { it.id == st.activeLayerId }
+        if (layer == null || !layer.visible) {
+            toast("Escolha uma camada visível para preencher")
+            return
+        }
+        st.busyFill = true
+        scope.launch {
+            val region = try {
+                withContext(Dispatchers.Default) { computeFill(snapshot, sheetW, sheetH, p.x, p.y, st.colorArgb, st.bucketGap, st.bucketGrow) }
+            } catch (e: CancellationException) {
+                st.busyFill = false
+                throw e
+            } catch (e: Throwable) {
+                null
+            }
+            st.busyFill = false
+            if (region == null) toast("Toque numa área dentro da folha, fora das linhas")
+            else if (st.project.currentFrameId == snapshot.currentFrameId) st.edit { it.addFill(st.activeLayerId, region) }
         }
     }
 
     val pngLauncher = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("image/png")) { uri ->
         if (uri != null) scope.launch {
-            val ok = Exporter.exportPng(context, uri, st.project, st.project.currentFrame, meta.width, meta.height)
+            val ok = Exporter.exportPng(context, uri, st.project, st.project.currentFrame, sheetW, sheetH)
             toast(if (ok) "PNG exportado" else "Falha ao exportar o PNG")
         }
     }
     val zipLauncher = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/zip")) { uri ->
         if (uri != null) scope.launch {
             toast("A exportar…")
-            val ok = Exporter.exportZip(context, uri, st.project, meta.width, meta.height, baseName)
+            val ok = Exporter.exportZip(context, uri, st.project, sheetW, sheetH, baseName)
             toast(if (ok) "ZIP exportado" else "Falha ao exportar o ZIP")
         }
     }
     val treeLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
         if (uri != null) scope.launch {
             toast("A exportar…")
-            val ok = Exporter.exportSequence(context, uri, st.project, meta.width, meta.height, baseName)
+            val ok = Exporter.exportSequence(context, uri, st.project, sheetW, sheetH, baseName)
             toast(if (ok) "Sequência exportada" else "Falha ao exportar a sequência")
         }
     }
 
     BackHandler { close() }
 
-    LaunchedEffect(st.project, fps) {
+    LaunchedEffect(st.project, fps, sheetW, sheetH) {
         delay(400)
-        if (!persist(store, meta, fps, st.project)) toast("Não foi possível guardar o projeto")
+        if (!persist(store, curMeta, fps, st.project)) toast("Não foi possível guardar o projeto")
     }
 
     LaunchedEffect(canvasSize) {
@@ -214,56 +262,67 @@ fun AnimationEditor(meta: ProjectMeta, initial: Project, store: ProjectStore, on
         }
     }
 
-    // Balde: o enchimento corre fora da thread principal.
-    LaunchedEffect(st.fillRequest) {
-        val req = st.fillRequest ?: return@LaunchedEffect
-        st.fillRequest = null
-        val snapshot = st.project
-        val layer = snapshot.layers.firstOrNull { it.id == st.activeLayerId }
-        if (layer == null || !layer.visible) {
-            toast("Escolha uma camada visível para preencher")
-            return@LaunchedEffect
-        }
-        st.busyFill = true
-        val region = try {
-            withContext(Dispatchers.Default) { computeFill(snapshot, meta.width, meta.height, req.x, req.y, st.colorArgb) }
-        } catch (e: Exception) {
-            null
-        }
-        st.busyFill = false
-        if (region == null) toast("Não foi possível preencher aqui")
-        else if (st.project.currentFrameId == snapshot.currentFrameId) st.edit { it.addFill(st.activeLayerId, region) }
+    val onTimelineGrip: (Float, Float) -> Unit = { _, dy ->
+        if (dy > 40f) { st.timelineBottom = true; prefs.timelineBottom = true }
+        else if (dy < -40f) { st.timelineBottom = false; prefs.timelineBottom = false }
+    }
+    val onToolsGrip: (Float, Float) -> Unit = { dx, _ ->
+        if (dx > 40f) { st.toolsRight = true; prefs.toolsRight = true }
+        else if (dx < -40f) { st.toolsRight = false; prefs.toolsRight = false }
+    }
+
+    val timelineBar: @Composable () -> Unit = {
+        TopBar(
+            st = st, sw = sheetW, sh = sheetH, expanded = expanded,
+            onMenu = { dialog = EditorDialog.Menu },
+            onAdd = { dialog = EditorDialog.AddLayer },
+            onCamera = { soon("Câmara") },
+            onColor = { dialog = EditorDialog.ColorPicker(it) },
+            onOnionOptions = { dialog = EditorDialog.Onion },
+            onLayerOptions = { dialog = EditorDialog.LayerOptions(it.id) },
+            onMoveLayer = { id, delta -> st.edit { p -> p.moveLayer(id, delta) } },
+            onFrameOptions = { dialog = EditorDialog.FrameActions(it) },
+            onGripEnd = onTimelineGrip,
+            modifier = Modifier.onSizeChanged { topBarHeightPx = it.height },
+        )
+    }
+
+    val toolPanel: @Composable () -> Unit = {
+        ToolPanel(
+            st = st, fps = fps,
+            onFpsEdit = { dialog = EditorDialog.FpsEdit },
+            onFpsStep = { fps = (fps + it).coerceIn(1, 120) },
+            onToolTap = { t ->
+                if (t == st.tool && (t == Tool.BRUSH || t == Tool.ERASER)) dialog = EditorDialog.BrushLibrary(t) else st.selectTool(t)
+            },
+            onToolLibrary = { t ->
+                if (t == Tool.BRUSH || t == Tool.ERASER) { st.selectTool(t); dialog = EditorDialog.BrushLibrary(t) }
+            },
+            onToolSettings = { t ->
+                st.selectTool(t)
+                dialog = if (t == Tool.BUCKET) EditorDialog.BucketSettings
+                else if (t == Tool.BRUSH || t == Tool.ERASER) EditorDialog.BrushSettings(t) else null
+            },
+            onAddFrame = { st.edit { p -> p.insertFrameAt(p.currentFrame + 1) } },
+            onCycleMode = {
+                st.playMode = PlayMode.values()[(st.playMode.ordinal + 1) % PlayMode.values().size]
+                toast("Reprodução: " + when (st.playMode) { PlayMode.ONCE -> "uma vez"; PlayMode.LOOP -> "loop"; PlayMode.PING_PONG -> "ping-pong" })
+            },
+            onGripEnd = onToolsGrip,
+        )
     }
 
     Box(Modifier.fillMaxSize().background(StudioColors.Navy)) {
         Column(Modifier.fillMaxSize()) {
-            TopBar(
-                st = st, sw = meta.width, sh = meta.height, expanded = expanded,
-                onMenu = { dialog = EditorDialog.Menu },
-                onCamera = { soon("Câmara") },
-                onColor = { dialog = EditorDialog.ColorPicker(it) },
-                onPlus = { dialog = EditorDialog.Plus(it.id) },
-                onLayerOptions = { dialog = EditorDialog.LayerOptions(it.id) },
-                onFrameOptions = { dialog = EditorDialog.FrameOptions(it) },
-                modifier = Modifier.onSizeChanged { topBarHeightPx = it.height },
-            )
+            if (!st.timelineBottom) timelineBar()
             Row(Modifier.weight(1f).fillMaxWidth()) {
-                ToolPanel(
-                    st = st, fps = fps,
-                    onFpsEdit = { dialog = EditorDialog.FpsEdit },
-                    onFpsStep = { fps = (fps + it).coerceIn(1, 120) },
-                    onToolTap = { t ->
-                        if (t == st.tool && (t == Tool.BRUSH || t == Tool.ERASER)) dialog = EditorDialog.BrushTool(t) else st.selectTool(t)
-                    },
-                    onToolOptions = { t -> st.selectTool(t); dialog = EditorDialog.BrushTool(t) },
-                    onAddFrame = { st.edit { p -> p.insertFrameAt(p.currentFrame + 1) } },
-                    onCycleMode = {
-                        st.playMode = PlayMode.values()[(st.playMode.ordinal + 1) % PlayMode.values().size]
-                        toast("Reprodução: " + when (st.playMode) { PlayMode.ONCE -> "uma vez"; PlayMode.LOOP -> "loop"; PlayMode.PING_PONG -> "ping-pong" })
-                    },
-                )
+                if (!st.toolsRight) toolPanel()
                 Box(
-                    Modifier.weight(1f).fillMaxHeight().padding(end = 6.dp, bottom = 6.dp)
+                    Modifier.weight(1f).fillMaxHeight()
+                        .padding(
+                            start = if (st.toolsRight) 6.dp else 0.dp, end = if (st.toolsRight) 0.dp else 6.dp,
+                            top = if (st.timelineBottom) 6.dp else 0.dp, bottom = if (st.timelineBottom) 0.dp else 6.dp,
+                        )
                         .clip(RoundedCornerShape(14.dp)).background(StudioColors.Workspace)
                         .onSizeChanged { canvasSize = it }
                 ) {
@@ -275,7 +334,7 @@ fun AnimationEditor(meta: ProjectMeta, initial: Project, store: ProjectStore, on
                             drawRect(Color.Black, topLeft = Offset.Zero, size = Size(sw, sh), style = Stroke(width = 1f / v.scale))
                         }
                     }
-                    // Cenário, onion skin, camadas de desenho, seleção do laço.
+                    // Cenário, onion skin, camadas de desenho, grelha e seleção do laço.
                     Canvas(Modifier.fillMaxSize().graphicsLayer { compositingStrategy = CompositingStrategy.Offscreen }) {
                         val v = st.view
                         val proj = st.project
@@ -303,6 +362,7 @@ fun AnimationEditor(meta: ProjectMeta, initial: Project, store: ProjectStore, on
                                     }
                                 }
                                 drawFrameLayers(proj, fid, sw, sh, LayerKind.DRAWING, null, true, live, st.activeLayerId, selLayer, selIdx, selT)
+                                drawGridOverlay(st.gridType, st.gridCell, sw, sh, Color(0xFF3DA5FF).copy(alpha = 0.55f), 1f / v.scale)
                                 val dash = PathEffect.dashPathEffect(floatArrayOf(10f / v.scale, 6f / v.scale))
                                 if (sel != null && selActive) {
                                     val b = sel.bounds
@@ -323,7 +383,7 @@ fun AnimationEditor(meta: ProjectMeta, initial: Project, store: ProjectStore, on
                             }
                         }
                     }
-                    // Entrada: 1 dedo usa a ferramenta; 2 dedos navegam (ou transformam a seleção).
+                    // Entrada: 1 dedo/caneta usa a ferramenta; 2 dedos navegam (ou transformam a seleção).
                     Box(
                         Modifier.fillMaxSize().pointerInput(Unit) {
                             awaitEachGesture {
@@ -334,12 +394,15 @@ fun AnimationEditor(meta: ProjectMeta, initial: Project, store: ProjectStore, on
                                 }
                                 val tool = st.tool
                                 val sel = st.selection
+                                val downIsPen = isPen(down)
+                                val navOnly = st.penOnly && !downIsPen
                                 val inkTool = st.isInkTool
                                 val lassoDraw = tool == Tool.LASSO && sel == null
-                                val stab = if (inkTool) StrokeStabilizer(st.stabilizer) else null
-                                var drawing = inkTool || lassoDraw
+                                val stab = if (inkTool && !navOnly) StrokeStabilizer(st.stabilizer) else null
+                                var drawing = !navOnly && (inkTool || lassoDraw)
                                 var multi = false
                                 var moved = false
+                                var rejected = false
                                 val downPos = down.position
                                 var lastScreen = downPos
                                 var lastRaw = st.view.screenToProject(downPos.toPoint())
@@ -354,16 +417,30 @@ fun AnimationEditor(meta: ProjectMeta, initial: Project, store: ProjectStore, on
                                 down.consume()
                                 do {
                                     val event = awaitPointerEvent()
-                                    val pressedCount = event.changes.count { it.pressed }
-                                    if (pressedCount >= 2) {
+                                    val penDown = event.changes.any { it.pressed && isPen(it) }
+                                    // Rejeição de palma: se a caneta aparece, o toque que começou antes é ignorado.
+                                    if (st.palmReject && !downIsPen && penDown) {
                                         if (drawing) { drawing = false; st.activePoints.clear() }
+                                        rejected = true
+                                    }
+                                    if (rejected) {
+                                        event.changes.forEach { it.consume() }
+                                        continue
+                                    }
+                                    val changes = if (st.palmReject && downIsPen) event.changes.filter { isPen(it) } else event.changes
+                                    val pressedCount = changes.count { it.pressed }
+                                    if (pressedCount >= 2) {
                                         multi = true
+                                        if (drawing) { drawing = false; st.activePoints.clear() }
+                                    }
+                                    val navigating = pressedCount >= 2 || (navOnly && pressedCount >= 1)
+                                    if (navigating) {
                                         val c = event.calculateCentroid(useCurrent = true)
                                         if (c.isSpecified) {
                                             val pan = event.calculatePan()
                                             val zoom = event.calculateZoom()
                                             val rotDeg = event.calculateRotation()
-                                            if (tool == Tool.LASSO && sel != null && st.selMode == SelMode.TRANSFORM) {
+                                            if (pressedCount >= 2 && tool == Tool.LASSO && sel != null && st.selMode == SelMode.TRANSFORM) {
                                                 val cur = st.view.screenToProject(c.toPoint())
                                                 val prev = st.view.screenToProject(Point(c.x - pan.x, c.y - pan.y))
                                                 st.selDx += cur.x - prev.x
@@ -379,7 +456,7 @@ fun AnimationEditor(meta: ProjectMeta, initial: Project, store: ProjectStore, on
                                             }
                                         }
                                     } else if (pressedCount == 1) {
-                                        val ch = event.changes.firstOrNull { it.id == down.id }
+                                        val ch = changes.firstOrNull { it.id == down.id }
                                         if (ch != null && ch.pressed) {
                                             if ((ch.position - downPos).getDistance() > 12f) moved = true
                                             if (drawing && !multi) {
@@ -393,7 +470,7 @@ fun AnimationEditor(meta: ProjectMeta, initial: Project, store: ProjectStore, on
                                                 } else {
                                                     pushPoint(st.view.screenToProject(ch.position.toPoint()))
                                                 }
-                                            } else if (tool == Tool.LASSO && sel != null && st.selMode == SelMode.MOVE && !multi) {
+                                            } else if (tool == Tool.LASSO && sel != null && st.selMode == SelMode.MOVE && !multi && !navOnly) {
                                                 val a = st.view.screenToProject(lastScreen.toPoint())
                                                 val b = st.view.screenToProject(ch.position.toPoint())
                                                 st.selDx += b.x - a.x
@@ -410,9 +487,9 @@ fun AnimationEditor(meta: ProjectMeta, initial: Project, store: ProjectStore, on
                                     st.commitStroke()
                                 } else if (drawing && lassoDraw) {
                                     st.finishLasso()
-                                } else if (tool == Tool.BUCKET && !multi && !moved) {
-                                    st.fillRequest = st.view.screenToProject(downPos.toPoint())
-                                } else if (tool == Tool.LASSO && sel != null) {
+                                } else if (tool == Tool.BUCKET && !multi && !moved && !rejected && !navOnly) {
+                                    requestFill(st.view.screenToProject(downPos.toPoint()))
+                                } else if (tool == Tool.LASSO && sel != null && !navOnly) {
                                     st.commitSelection()
                                 } else {
                                     st.activePoints.clear()
@@ -421,18 +498,14 @@ fun AnimationEditor(meta: ProjectMeta, initial: Project, store: ProjectStore, on
                         }
                     )
                     // Controlos sobre a folha.
-                    OverlayChip(
-                        "Onion", selected = st.onionOn, modifier = Modifier.align(Alignment.TopStart).padding(8.dp),
-                        onLongClick = { dialog = EditorDialog.Onion }, onClick = { st.onionOn = !st.onionOn },
-                    )
                     ToolCell(
-                        width = 36.dp, height = 36.dp, modifier = Modifier.align(Alignment.TopEnd).padding(8.dp),
+                        width = 30.dp, height = 30.dp, modifier = Modifier.align(Alignment.TopEnd).padding(8.dp),
                         onClick = { st.view = ViewTransform.fitSheet(sw, sh, canvasSize.width.toFloat(), canvasSize.height.toFloat(), 12f) },
-                    ) { Icon(Icons.Default.FitScreen, "Ajustar à folha", tint = it) }
+                    ) { Icon(Icons.Default.FitScreen, "Ajustar à folha", tint = it, modifier = androidx.compose.ui.Modifier.then(Modifier)) }
                     if (st.selection != null) {
                         Row(
-                            Modifier.align(Alignment.TopCenter).padding(top = 8.dp).studioCard().padding(4.dp),
-                            horizontalArrangement = Arrangement.spacedBy(4.dp),
+                            Modifier.align(Alignment.TopCenter).padding(top = 8.dp).studioCard(12.dp).padding(3.dp),
+                            horizontalArrangement = Arrangement.spacedBy(3.dp),
                         ) {
                             OverlayChip("Mover", selected = st.selMode == SelMode.MOVE) { st.selMode = SelMode.MOVE }
                             OverlayChip("Transformar", selected = st.selMode == SelMode.TRANSFORM) { st.selMode = SelMode.TRANSFORM }
@@ -441,40 +514,49 @@ fun AnimationEditor(meta: ProjectMeta, initial: Project, store: ProjectStore, on
                         }
                     }
                     Row(
-                        Modifier.align(Alignment.BottomCenter).padding(bottom = 8.dp)
-                            .clip(RoundedCornerShape(10.dp)).background(StudioColors.Surface.copy(alpha = 0.92f))
-                            .border(1.dp, StudioColors.Outline, RoundedCornerShape(10.dp)).padding(horizontal = 12.dp, vertical = 5.dp),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        Modifier.align(Alignment.BottomCenter).padding(bottom = 6.dp)
+                            .clip(RoundedCornerShape(9.dp)).background(StudioColors.Surface.copy(alpha = 0.94f))
+                            .border(1.dp, StudioColors.Outline, RoundedCornerShape(9.dp)).padding(horizontal = 10.dp, vertical = 4.dp),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
                     ) {
-                        Text("FRAME", style = StudioType.Caption)
-                        Text("${st.project.currentFrame + 1} / ${st.project.frameCount}", style = StudioType.Number)
-                        if (st.busyFill) Text("A PREENCHER…", style = StudioType.Caption.copy(color = StudioColors.Accent))
+                        Text("FRAME", style = StudioType.Caption.copy(fontSize = 9.sp))
+                        Text("${st.project.currentFrame + 1} / ${st.project.frameCount}", style = StudioType.Number.copy(fontSize = 12.sp))
+                        if (st.busyFill) Text("A PREENCHER…", style = StudioType.Caption.copy(fontSize = 9.sp, color = StudioColors.Accent))
                     }
                 }
+                if (st.toolsRight) toolPanel()
             }
+            if (st.timelineBottom) timelineBar()
         }
-        ExpandTab(
-            expanded = expanded, onSet = { expanded = it },
-            modifier = Modifier.align(Alignment.TopCenter).offset { IntOffset(0, topBarHeightPx) },
-        )
+        if (st.timelineBottom) {
+            ExpandTab(
+                expanded = expanded, atBottom = true, onSet = { expanded = it },
+                modifier = Modifier.align(Alignment.BottomCenter).offset { IntOffset(0, -topBarHeightPx) },
+            )
+        } else {
+            ExpandTab(
+                expanded = expanded, atBottom = false, onSet = { expanded = it },
+                modifier = Modifier.align(Alignment.TopCenter).offset { IntOffset(0, topBarHeightPx) },
+            )
+        }
     }
 
     when (val d = dialog) {
         null -> {}
-        EditorDialog.Menu -> StudioDialog("Menu", { dialog = null }) {
-            SectionLabel("IMPORTAR")
-            MenuItem("Importar imagem", false) { soon("Importar imagem") }
-            MenuItem("Importar vídeo", false) { soon("Importar vídeo") }
-            SectionLabel("EXPORTAR")
-            MenuItem("Vídeo MP4", false) { soon("Exportar MP4") }
-            MenuItem("PNG do frame atual") { dialog = null; pngLauncher.launch("${baseName}_${st.project.currentFrame + 1}.png") }
-            MenuItem("Sequência de PNG (escolher pasta)") { dialog = null; treeLauncher.launch(null) }
-            MenuItem("ZIP com todos os frames") { dialog = null; zipLauncher.launch("$baseName.zip") }
-            SectionLabel("PROJETO")
-            MenuItem("Adicionar camada") { st.addLayer(LayerKind.DRAWING); dialog = null }
-            MenuItem("Adicionar cenário") { st.addLayer(LayerKind.SCENERY); dialog = null }
-            MenuItem("Voltar aos projetos") { dialog = null; close() }
-        }
+        EditorDialog.Menu -> MenuPopup(
+            penOnly = st.penOnly, palmReject = st.palmReject,
+            onPenOnly = { st.penOnly = it; prefs.penOnly = it },
+            onPalm = { st.palmReject = it; prefs.palmReject = it },
+            onGrid = { dialog = EditorDialog.Grid },
+            onResolution = { dialog = EditorDialog.Resolution },
+            onOrganize = { dialog = EditorDialog.Organize },
+            onSoon = { soon(it) },
+            onExportPng = { dialog = null; pngLauncher.launch("${baseName}_${st.project.currentFrame + 1}.png") },
+            onExportSequence = { dialog = null; treeLauncher.launch(null) },
+            onExportZip = { dialog = null; zipLauncher.launch("$baseName.zip") },
+            onBack = { dialog = null; close() },
+            onDismiss = { dialog = null },
+        )
         is EditorDialog.ColorPicker -> ColorPickerDialog(
             initialMethod = d.method, initial = st.colorArgb, recents = st.recentColors,
             onConfirm = { c ->
@@ -486,16 +568,12 @@ fun AnimationEditor(meta: ProjectMeta, initial: Project, store: ProjectStore, on
             },
             onDismiss = { dialog = null },
         )
-        is EditorDialog.Plus -> {
-            val l = st.project.layers.firstOrNull { it.id == d.layerId }
-            if (l == null) dialog = null else {
-                val scenery = l.kind == LayerKind.SCENERY
-                StudioDialog(if (scenery) "Cenário" else "Camada", { dialog = null }) {
-                    MenuItem(if (scenery) "Novo cenário" else "Nova camada") { st.addLayer(l.kind); dialog = null }
-                    MenuItem(if (scenery) "Duplicar cenário" else "Duplicar camada") { st.duplicateLayer(l.id); dialog = null }
-                }
-            }
-        }
+        EditorDialog.AddLayer -> AddLayerDialog(
+            onLayer = { st.addLayer(LayerKind.DRAWING); dialog = null },
+            onScenery = { st.addLayer(LayerKind.SCENERY); dialog = null },
+            onDuplicate = { st.duplicateLayer(st.activeLayerId); dialog = null },
+            onDismiss = { dialog = null },
+        )
         is EditorDialog.LayerOptions -> {
             val l = st.project.layers.firstOrNull { it.id == d.layerId }
             if (l == null) dialog = null else LayerOptionsDialog(
@@ -517,42 +595,76 @@ fun AnimationEditor(meta: ProjectMeta, initial: Project, store: ProjectStore, on
                 onDismiss = { dialog = null },
             )
         }
-        is EditorDialog.FrameOptions -> {
+        is EditorDialog.FrameActions -> {
             val i = d.index
-            StudioDialog("Frame ${i + 1}", { dialog = null }) {
-                MenuItem("Copiar frame") { st.clip = st.project.frameClip(i); dialog = null }
-                MenuItem("Colar à esquerda", st.clip != null) { st.edit { p -> p.insertFrameAt(i, st.clip ?: emptyMap()) }; dialog = null }
-                MenuItem("Colar à direita", st.clip != null) { st.edit { p -> p.insertFrameAt(i + 1, st.clip ?: emptyMap()) }; dialog = null }
-                MenuItem("Inserir frame em branco à esquerda") { st.edit { p -> p.insertFrameAt(i) }; dialog = null }
-                MenuItem("Inserir frame em branco à direita") { st.edit { p -> p.insertFrameAt(i + 1) }; dialog = null }
-                MenuItem("Duplicar frame") { st.edit { p -> p.select(i).duplicateCurrentFrame() }; dialog = null }
-                MenuItem("Apagar frame", st.project.frameCount > 1) { st.edit { p -> p.select(i).deleteCurrentFrame() }; dialog = null }
-            }
-        }
-        is EditorDialog.BrushTool -> {
-            val isBrush = d.tool == Tool.BRUSH
-            BrushDialog(
-                kind = if (isBrush) BrushKind.BRUSH else BrushKind.ERASER,
-                presetId = if (isBrush) st.brushPresetId else st.eraserPresetId,
-                size = if (isBrush) st.brushSize else st.eraserSize,
-                opacity = if (isBrush) st.brushOpacity else st.eraserOpacity,
-                stabilizer = st.stabilizer,
-                onPreset = { p ->
-                    if (isBrush) {
-                        st.brushPresetId = p.id; st.brushSize = p.defaultSize; st.brushOpacity = p.defaultOpacity
-                    } else {
-                        st.eraserPresetId = p.id; st.eraserSize = p.defaultSize; st.eraserOpacity = p.defaultOpacity
-                    }
-                },
-                onSize = { if (isBrush) st.brushSize = it else st.eraserSize = it },
-                onOpacity = { if (isBrush) st.brushOpacity = it else st.eraserOpacity = it },
-                onStabilizer = { st.stabilizer = it },
+            FrameActionsDialog(
+                index = i, canPaste = st.clip != null, canDelete = st.project.frameCount > 1,
+                onPasteLeft = { st.edit { p -> p.insertFrameAt(i, st.clip ?: emptyMap()) }; dialog = null },
+                onNewLeft = { st.edit { p -> p.insertFrameAt(i) }; dialog = null },
+                onCopy = { st.clip = st.project.frameClip(i); dialog = null },
+                onPng = { dialog = null; st.selectFrame(i); pngLauncher.launch("${baseName}_${i + 1}.png") },
+                onDelete = { st.edit { p -> p.select(i).deleteCurrentFrame() }; dialog = null },
+                onNewRight = { st.edit { p -> p.insertFrameAt(i + 1) }; dialog = null },
+                onPasteRight = { st.edit { p -> p.insertFrameAt(i + 1, st.clip ?: emptyMap()) }; dialog = null },
+                onDuplicate = { st.edit { p -> p.select(i).duplicateCurrentFrame() }; dialog = null },
                 onDismiss = { dialog = null },
             )
         }
+        is EditorDialog.BrushLibrary -> {
+            val isBrush = d.tool == Tool.BRUSH
+            BrushLibraryDialog(
+                kind = st.kindOf(d.tool), selectedId = if (isBrush) st.brushPresetId else st.eraserPresetId,
+                onSelect = { p -> st.applyPreset(p); dialog = null },
+                onSettings = { p -> st.applyPreset(p); dialog = EditorDialog.BrushSettings(d.tool) },
+                onDismiss = { dialog = null },
+            )
+        }
+        is EditorDialog.BrushSettings -> {
+            val isBrush = d.tool == Tool.BRUSH
+            BrushSettingsDialog(
+                kind = st.kindOf(d.tool),
+                preset = BrushLibrary.byId(st.presetIdOf(d.tool)),
+                size = if (isBrush) st.brushSize else st.eraserSize,
+                opacity = if (isBrush) st.brushOpacity else st.eraserOpacity,
+                stabilizer = st.stabilizer, mode = st.drawMode,
+                onSize = { if (isBrush) st.brushSize = it else st.eraserSize = it },
+                onOpacity = { if (isBrush) st.brushOpacity = it else st.eraserOpacity = it },
+                onStabilizer = { st.stabilizer = it; prefs.stabilizer = it },
+                onMode = { st.drawMode = it },
+                onDismiss = { dialog = null },
+            )
+        }
+        EditorDialog.BucketSettings -> BucketDialog(
+            gap = st.bucketGap, grow = st.bucketGrow,
+            onChange = { g, e -> st.bucketGap = g; st.bucketGrow = e; dialog = null },
+            onDismiss = { dialog = null },
+        )
         EditorDialog.Onion -> OnionDialog(
             on = st.onionOn, before = st.onionBefore, after = st.onionAfter,
             onChange = { on, b, a -> st.onionOn = on; st.onionBefore = b; st.onionAfter = a; dialog = null },
+            onDismiss = { dialog = null },
+        )
+        EditorDialog.Grid -> GridDialog(
+            type = st.gridType, cell = st.gridCell,
+            onChange = { t, c -> st.gridType = t; st.gridCell = c; dialog = null },
+            onDismiss = { dialog = null },
+        )
+        EditorDialog.Resolution -> ResolutionDialog(
+            width = sheetW, height = sheetH,
+            onApply = { w, h ->
+                sheetW = w
+                sheetH = h
+                st.view = ViewTransform.fitSheet(w.toFloat(), h.toFloat(), canvasSize.width.toFloat(), canvasSize.height.toFloat(), 12f)
+                dialog = null
+            },
+            onDismiss = { dialog = null },
+        )
+        EditorDialog.Organize -> OrganizeDialog(
+            timelineBottom = st.timelineBottom, toolsRight = st.toolsRight,
+            onChange = { b, r ->
+                st.timelineBottom = b; prefs.timelineBottom = b
+                st.toolsRight = r; prefs.toolsRight = r
+            },
             onDismiss = { dialog = null },
         )
         EditorDialog.FpsEdit -> {
