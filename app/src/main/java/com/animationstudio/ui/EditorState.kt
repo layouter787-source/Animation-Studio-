@@ -12,7 +12,9 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toArgb
 import com.animationstudio.domain.Affine
 import com.animationstudio.domain.Bounds
+import com.animationstudio.domain.BrushKind
 import com.animationstudio.domain.BrushLibrary
+import com.animationstudio.domain.BrushPreset
 import com.animationstudio.domain.BrushStroke
 import com.animationstudio.domain.History
 import com.animationstudio.domain.Lasso
@@ -43,24 +45,35 @@ internal class EditorState(initial: Project) {
     var colorArgb by mutableIntStateOf(0xFF111111.toInt())
     val recentColors = mutableStateListOf<Int>()
 
-    var brushPresetId by mutableStateOf("ink")
+    var brushPresetId by mutableStateOf("ink_g")
     var brushSize by mutableFloatStateOf(6f)
     var brushOpacity by mutableFloatStateOf(1f)
     var eraserPresetId by mutableStateOf("eraser_hard")
     var eraserSize by mutableFloatStateOf(24f)
     var eraserOpacity by mutableFloatStateOf(1f)
     var stabilizer by mutableFloatStateOf(0.35f)
+    /** 0 = normal, 1 = desenhar só dentro do que existe, 2 = desenhar por trás do que existe. */
+    var drawMode by mutableIntStateOf(0)
+
+    var bucketGap by mutableIntStateOf(6)
+    var bucketGrow by mutableIntStateOf(2)
 
     var onionOn by mutableStateOf(true)
     var onionBefore by mutableIntStateOf(1)
     var onionAfter by mutableIntStateOf(1)
 
+    var gridType by mutableStateOf(GridType.NONE)
+    var gridCell by mutableFloatStateOf(64f)
+
+    var penOnly by mutableStateOf(false)
+    var palmReject by mutableStateOf(true)
+    var timelineBottom by mutableStateOf(false)
+    var toolsRight by mutableStateOf(false)
+
     var playing by mutableStateOf(false)
     var playMode by mutableStateOf(PlayMode.LOOP)
     var clip by mutableStateOf<Map<Long, List<BrushStroke>>?>(null)
     val activePoints = mutableStateListOf<Point>()
-
-    var fillRequest by mutableStateOf<Point?>(null)
     var busyFill by mutableStateOf(false)
 
     var selection by mutableStateOf<Selection?>(null)
@@ -71,8 +84,24 @@ internal class EditorState(initial: Project) {
     var selRot by mutableFloatStateOf(0f)
 
     val isInkTool: Boolean get() = tool == Tool.BRUSH || tool == Tool.ERASER
-    val currentPreset get() = BrushLibrary.byId(if (tool == Tool.ERASER) eraserPresetId else brushPresetId)
     val currentSize: Float get() = if (tool == Tool.ERASER) eraserSize else brushSize
+
+    fun presetIdOf(t: Tool): String = if (t == Tool.ERASER) eraserPresetId else brushPresetId
+
+    fun kindOf(t: Tool): BrushKind = if (t == Tool.ERASER) BrushKind.ERASER else BrushKind.BRUSH
+
+    /** Escolhe uma predefinição e adota o tamanho e a opacidade que ela recomenda. */
+    fun applyPreset(p: BrushPreset) {
+        if (p.kind == BrushKind.ERASER) {
+            eraserPresetId = p.id
+            eraserSize = p.defaultSize
+            eraserOpacity = p.defaultOpacity
+        } else {
+            brushPresetId = p.id
+            brushSize = p.defaultSize
+            brushOpacity = p.defaultOpacity
+        }
+    }
 
     /** Cor do traço em curso: opacidade do pincel × alfa da cor; a borracha usa preto com a sua opacidade. */
     fun strokeColorArgb(): Int =
@@ -80,8 +109,9 @@ internal class EditorState(initial: Project) {
         else Color(colorArgb).let { it.copy(alpha = it.alpha * brushOpacity) }.toArgb()
 
     fun makeStroke(points: List<Point>): BrushStroke {
-        val p = currentPreset
-        return BrushStroke(points, strokeColorArgb(), currentSize, tool == Tool.ERASER, null, p.taper, p.hardness)
+        val p = BrushLibrary.byId(presetIdOf(tool))
+        val erase = tool == Tool.ERASER
+        return BrushStroke(points, strokeColorArgb(), currentSize, erase, null, p.taper, p.hardness, p.id, if (erase) 0 else drawMode)
     }
 
     fun edit(change: (Project) -> Project) {
