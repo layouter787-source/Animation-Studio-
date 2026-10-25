@@ -11,27 +11,21 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toArgb
 import com.animationstudio.domain.Affine
-import com.animationstudio.domain.Bounds
 import com.animationstudio.domain.BrushKind
 import com.animationstudio.domain.BrushLibrary
 import com.animationstudio.domain.BrushPreset
 import com.animationstudio.domain.BrushStroke
 import com.animationstudio.domain.History
-import com.animationstudio.domain.Lasso
+import com.animationstudio.domain.ImageData
 import com.animationstudio.domain.LayerKind
 import com.animationstudio.domain.PlayMode
 import com.animationstudio.domain.Point
 import com.animationstudio.domain.Project
 import com.animationstudio.domain.ViewTransform
-import com.animationstudio.domain.removeElements
-import com.animationstudio.domain.transformElements
 
 internal enum class Tool { BRUSH, ERASER, BUCKET, LASSO }
 
-internal enum class SelMode { MOVE, TRANSFORM }
-
-/** Elementos (por índice) selecionados com o laço, no desenho atual de uma camada. */
-internal class Selection(val layerId: Long, val frameId: Long, val indices: Set<Int>, val bounds: Bounds)
+internal enum class LassoShape { FREE, RECT, ELLIPSE }
 
 @Stable
 internal class EditorState(initial: Project) {
@@ -51,11 +45,11 @@ internal class EditorState(initial: Project) {
     var eraserPresetId by mutableStateOf("eraser_hard")
     var eraserSize by mutableFloatStateOf(24f)
     var eraserOpacity by mutableFloatStateOf(1f)
-    var stabilizer by mutableFloatStateOf(0.35f)
+    var stabilizer by mutableFloatStateOf(0.25f)
     /** 0 = normal, 1 = desenhar só dentro do que existe, 2 = desenhar por trás do que existe. */
     var drawMode by mutableIntStateOf(0)
 
-    var bucketGap by mutableIntStateOf(6)
+    var bucketGap by mutableIntStateOf(8)
     var bucketGrow by mutableIntStateOf(2)
 
     var onionOn by mutableStateOf(true)
@@ -76,12 +70,13 @@ internal class EditorState(initial: Project) {
     val activePoints = mutableStateListOf<Point>()
     var busyFill by mutableStateOf(false)
 
-    var selection by mutableStateOf<Selection?>(null)
-    var selMode by mutableStateOf(SelMode.MOVE)
-    var selDx by mutableFloatStateOf(0f)
-    var selDy by mutableFloatStateOf(0f)
-    var selScale by mutableFloatStateOf(1f)
-    var selRot by mutableFloatStateOf(0f)
+    // ---- laço: seleção flutuante em pixels ----
+    var lassoShape by mutableStateOf(LassoShape.FREE)
+    var floating by mutableStateOf<ImageData?>(null)
+    private var floatOrigin: ImageData? = null
+    private var floatLayerId = -1L
+    var clipImage by mutableStateOf<ImageData?>(null)
+    var busyLift by mutableStateOf(false)
 
     val isInkTool: Boolean get() = tool == Tool.BRUSH || tool == Tool.ERASER
     val currentSize: Float get() = if (tool == Tool.ERASER) eraserSize else brushSize
@@ -125,7 +120,7 @@ internal class EditorState(initial: Project) {
 
     fun selectTool(t: Tool) {
         if (tool == t) return
-        clearSelection()
+        commitFloating()
         activePoints.clear()
         tool = t
     }
@@ -140,67 +135,94 @@ internal class EditorState(initial: Project) {
         edit { it.addStroke(activeLayerId, stroke) }
     }
 
-    // ---- laço ----
+    // ---- seleção flutuante ----
 
-    private fun resetSelTransform() {
-        selDx = 0f
-        selDy = 0f
-        selScale = 1f
-        selRot = 0f
+    fun beginFloating(img: ImageData, layerId: Long) {
+        floating = img
+        floatOrigin = img
+        floatLayerId = layerId
     }
 
-    fun clearSelection() {
-        selection = null
-        resetSelTransform()
+    /** Fixa a seleção na camada de onde saiu (um passo no histórico). */
+    fun commitFloating() {
+        val f = floating ?: return
+        val lid = floatLayerId
+        floating = null
+        floatOrigin = null
+        edit { it.addStroke(lid, BrushStroke(emptyList(), 0, 0f, image = f)) }
     }
 
-    private fun activeStrokes(frameId: Long): List<BrushStroke> =
-        project.layers.firstOrNull { it.id == activeLayerId }?.drawingAt(frameId)?.strokes ?: emptyList()
-
-    fun finishLasso() {
-        val poly = activePoints.toList()
-        activePoints.clear()
-        val fid = project.currentFrameId
-        val strokes = activeStrokes(fid)
-        val idx = Lasso.select(strokes, poly)
-        val b = Lasso.boundsOf(strokes, idx)
-        resetSelTransform()
-        selection = if (idx.isEmpty() || b == null) null else Selection(activeLayerId, fid, idx, b)
+    fun discardFloating() {
+        floating = null
+        floatOrigin = null
     }
 
-    fun commitSelection() {
-        val s = selection ?: return
-        if (selDx == 0f && selDy == 0f && selScale == 1f && selRot == 0f) return
-        val m = Affine.around(Point(s.bounds.cx, s.bounds.cy), selScale, selRot, selDx, selDy)
-        edit { it.transformElements(s.layerId, s.indices, m) }
-        val nb = Lasso.boundsOf(activeStrokes(s.frameId), s.indices)
-        resetSelTransform()
-        selection = if (nb == null) null else Selection(s.layerId, s.frameId, s.indices, nb)
+    fun flipFloatingH() {
+        val f = floating ?: return
+        floating = f.transformed(Affine.flipH(f.bounds().cx))
     }
 
-    fun deleteSelection() {
-        val s = selection ?: return
-        edit { it.removeElements(s.layerId, s.indices) }
-        clearSelection()
+    fun flipFloatingV() {
+        val f = floating ?: return
+        floating = f.transformed(Affine.flipV(f.bounds().cy))
+    }
+
+    fun rotateFloating(deg: Float) {
+        val f = floating ?: return
+        val b = f.bounds()
+        floating = f.transformed(Affine.around(Point(b.cx, b.cy), 1f, Math.toRadians(deg.toDouble()).toFloat(), 0f, 0f))
+    }
+
+    fun resetFloating() {
+        floating = floatOrigin
+    }
+
+    fun copyFloating() {
+        clipImage = floating
+    }
+
+    fun cutFloating() {
+        clipImage = floating
+        discardFloating()
+    }
+
+    /** Fixa a seleção e deixa uma cópia flutuante no mesmo sítio, pronta a mover. */
+    fun duplicateFloating() {
+        val f = floating ?: return
+        val lid = floatLayerId
+        commitFloating()
+        floating = f
+        floatOrigin = f
+        floatLayerId = lid
+    }
+
+    fun pasteClip(center: Point) {
+        val c = clipImage ?: return
+        commitFloating()
+        val b = c.bounds()
+        val moved = c.transformed(Affine.translate(center.x - b.cx, center.y - b.cy))
+        floating = moved
+        floatOrigin = moved
+        floatLayerId = activeLayerId
     }
 
     // ---- histórico e navegação ----
 
     fun undo() {
         if (playing) return
+        discardFloating()
         val r = history.undo(project) ?: return
         project = r.first
         history = r.second
-        clearSelection()
         fixActiveLayer()
     }
 
     fun redo() {
         if (playing) return
+        discardFloating()
         val r = history.redo(project) ?: return
         project = r.first
         history = r.second
-        clearSelection()
         fixActiveLayer()
     }
 
@@ -210,13 +232,13 @@ internal class EditorState(initial: Project) {
 
     fun go(delta: Int) {
         if (playing) return
-        clearSelection()
+        commitFloating()
         project = project.select(project.currentFrame + delta)
     }
 
     fun selectFrame(i: Int) {
         if (playing) return
-        clearSelection()
+        commitFloating()
         project = project.select(i)
     }
 
@@ -236,14 +258,13 @@ internal class EditorState(initial: Project) {
 
     fun deleteLayer(id: Long) {
         edit { it.deleteLayer(id) }
-        clearSelection()
         fixActiveLayer()
     }
 
     fun togglePlay() {
         if (playing) { playing = false; return }
         if (project.frameCount < 2) return
-        clearSelection()
+        commitFloating()
         if (playMode == PlayMode.ONCE && project.currentFrame == project.frameCount - 1) project = project.select(0)
         playing = true
     }

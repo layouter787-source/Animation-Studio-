@@ -1,6 +1,7 @@
 package com.animationstudio.ui
 
 import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.geometry.Size
@@ -8,10 +9,14 @@ import androidx.compose.ui.graphics.BlendMode
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.ImageShader
+import androidx.compose.ui.graphics.Matrix
 import androidx.compose.ui.graphics.Paint
 import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.ShaderBrush
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
+import androidx.compose.ui.graphics.TileMode
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.CanvasDrawScope
 import androidx.compose.ui.graphics.drawscope.DrawScope
@@ -21,14 +26,13 @@ import androidx.compose.ui.graphics.drawscope.clipRect
 import androidx.compose.ui.graphics.drawscope.withTransform
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.unit.Density
-import androidx.compose.ui.unit.IntOffset
-import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.LayoutDirection
 import com.animationstudio.domain.BrushKind
 import com.animationstudio.domain.BrushLibrary
 import com.animationstudio.domain.BrushPreset
 import com.animationstudio.domain.BrushStroke
 import com.animationstudio.domain.FillRegion
+import com.animationstudio.domain.ImageData
 import com.animationstudio.domain.LayerKind
 import com.animationstudio.domain.Point
 import com.animationstudio.domain.Project
@@ -37,20 +41,36 @@ import com.animationstudio.domain.StampGeometry
 import com.animationstudio.domain.StampShape
 import com.animationstudio.domain.StrokeGeometry
 import com.animationstudio.domain.bounds
+import java.util.concurrent.ConcurrentHashMap
 import androidx.compose.ui.graphics.Canvas as GfxCanvas
 import kotlin.math.PI
 import kotlin.math.cos
+import kotlin.math.hypot
 import kotlin.math.max
 import kotlin.math.roundToInt
 import kotlin.math.sin
 
 // ---------------------------------------------------------------------------------------------
-// Traços: contínuos (corpo + pontas afiladas + bordas suaves) ou por carimbos (textura, plantas, luz).
+// Traços. Motores: contínuo (pontas afiladas), toques suaves (aerógrafo/aguarela), linhas paralelas
+// (cerdas), carimbos (plantas, luz) e grão de papel aplicado por cima (lápis, carvão).
 // ---------------------------------------------------------------------------------------------
 
 private class InkPass(val width: Float, val alpha: Float, val body: Path?, val polys: List<Path>, val tips: List<Pair<Offset, Float>>)
 
-private class InkRender(val passes: List<InkPass>, val stampBuckets: List<Pair<Float, Path>>?)
+private class LineRender(val path: Path, val width: Float, val alpha: Float)
+
+private class InkRender(
+    val passes: List<InkPass>,
+    val stampBuckets: List<Pair<Float, Path>>?,
+    val dabs: List<Stamp>?,
+    val dabHardness: Float,
+    val dabFlow: Float,
+    val lines: List<LineRender>?,
+    val grain: Float,
+)
+
+private val dabCache = ConcurrentHashMap<Int, ImageBitmap>()
+private val grainCache = ConcurrentHashMap<Int, ImageBitmap>()
 
 private fun polyPath(poly: List<Point>): Path {
     val p = Path()
@@ -60,17 +80,21 @@ private fun polyPath(poly: List<Point>): Path {
     return p
 }
 
+private fun polyline(pts: List<Point>): Path {
+    val p = Path()
+    if (pts.isEmpty()) return p
+    p.moveTo(pts[0].x, pts[0].y)
+    if (pts.size == 1) p.lineTo(pts[0].x, pts[0].y)
+    for (i in 1 until pts.size) p.lineTo(pts[i].x, pts[i].y)
+    return p
+}
+
 private fun buildPass(s: BrushStroke, width: Float, alpha: Float): InkPass {
     val pts = s.points
     if (pts.size == 1) return InkPass(width, alpha, null, emptyList(), listOf(Offset(pts[0].x, pts[0].y) to width / 2f))
     val shape = StrokeGeometry.build(pts, width, s.taper)
     var body: Path? = null
-    if (shape.body.size >= 2) {
-        val b = Path()
-        b.moveTo(shape.body[0].x, shape.body[0].y)
-        for (i in 1 until shape.body.size) b.lineTo(shape.body[i].x, shape.body[i].y)
-        body = b
-    }
+    if (shape.body.size >= 2) body = polyline(shape.body)
     val polys = ArrayList<Path>()
     val tips = ArrayList<Pair<Offset, Float>>()
     val st = shape.start
@@ -128,13 +152,16 @@ private fun addStamp(path: Path, shape: StampShape, st: Stamp) {
     }
 }
 
+private fun seedOf(s: BrushStroke): Long {
+    val first = s.points.firstOrNull() ?: return 0L
+    return ((first.x * 131f).toInt() * 31 + (first.y * 131f).toInt()).toLong()
+}
+
 private fun buildStamps(s: BrushStroke, preset: BrushPreset): List<Pair<Float, Path>> {
-    val first = s.points.firstOrNull()
-    val seed = if (first == null) 0 else (first.x * 131f).toInt() * 31 + (first.y * 131f).toInt()
     val low = Path()
     val mid = Path()
     val high = Path()
-    for (st in StampGeometry.generate(s.points, s.width, preset, seed)) {
+    for (st in StampGeometry.generate(s.points, s.width, preset, seedOf(s).toInt())) {
         val target = if (st.alpha < 0.5f) low else if (st.alpha < 0.8f) mid else high
         addStamp(target, preset.stamp, st)
     }
@@ -143,9 +170,24 @@ private fun buildStamps(s: BrushStroke, preset: BrushPreset): List<Pair<Float, P
 
 private fun buildInk(s: BrushStroke): InkRender {
     val preset = if (s.brush.isNotEmpty()) BrushLibrary.byIdOrNull(s.brush) else null
-    if (preset != null && preset.stamp != StampShape.NONE) return InkRender(emptyList(), buildStamps(s, preset))
+    val grain = preset?.grain ?: 0f
+    if (preset != null && preset.stamp != StampShape.NONE) {
+        return InkRender(emptyList(), buildStamps(s, preset), null, 0f, 0f, null, grain)
+    }
+    if (preset != null && preset.soft) {
+        val spacing = 0.08f
+        val flow = 1f - Math.pow(0.05, spacing.toDouble()).toFloat()
+        return InkRender(emptyList(), null, StampGeometry.dabs(s.points, s.width, s.taper, spacing), s.hardness.coerceIn(0f, 1f), flow, null, grain)
+    }
+    if (preset != null && preset.lines > 1) {
+        val pl = StrokeGeometry.parallel(s.points, s.width, preset.lines)
+        val rnd = java.util.Random(seedOf(s))
+        val lines = pl.lines.map { pts -> LineRender(polyline(pts), pl.lineWidth, 1f - preset.lineJitter * rnd.nextFloat()) }
+        return InkRender(emptyList(), null, null, 0f, 0f, lines, grain)
+    }
     val h = s.hardness.coerceIn(0f, 1f)
-    if (h > 0.95f) return InkRender(listOf(buildPass(s, s.width, 1f)), null)
+    if (h > 0.95f) return InkRender(listOf(buildPass(s, s.width, 1f)), null, null, 0f, 0f, null, grain)
+    // Traços antigos com borda suave: passagens empilhadas.
     val core = s.width * (0.4f + 0.6f * h)
     val span = s.width - core
     return InkRender(
@@ -155,8 +197,49 @@ private fun buildInk(s: BrushStroke): InkRender {
             buildPass(s, core + span * 0.33f, 0.3f),
             buildPass(s, core, 1f),
         ),
-        null,
+        null, null, 0f, 0f, null, grain,
     )
+}
+
+private fun dabImage(hardness: Float): ImageBitmap {
+    val key = (hardness.coerceIn(0f, 1f) * 20f).roundToInt()
+    return dabCache.getOrPut(key) {
+        val h = key / 20f
+        val n = 64
+        val c = (n - 1) / 2f
+        val px = IntArray(n * n)
+        for (y in 0 until n) {
+            for (x in 0 until n) {
+                val d = hypot(x - c, y - c) / (n / 2f)
+                val a = if (d >= 1f) 0f else if (d <= h) 1f else {
+                    val t = (1f - d) / (1f - h)
+                    t * t * (3f - 2f * t)
+                }
+                px[y * n + x] = ((a * 255f).roundToInt() shl 24) or 0xFFFFFF
+            }
+        }
+        val bmp = Bitmap.createBitmap(n, n, Bitmap.Config.ARGB_8888)
+        bmp.setPixels(px, 0, n, 0, 0, n, n)
+        bmp.asImageBitmap()
+    }
+}
+
+private fun grainImage(strength: Float): ImageBitmap {
+    val key = (strength.coerceIn(0f, 1f) * 20f).roundToInt()
+    return grainCache.getOrPut(key) {
+        val s = key / 20f
+        val n = 128
+        val rnd = java.util.Random(7L)
+        val px = IntArray(n * n)
+        for (i in px.indices) {
+            val u = Math.pow(rnd.nextDouble(), 0.8).toFloat()
+            val a = (255f * (1f - s * u)).roundToInt().coerceIn(0, 255)
+            px[i] = (a shl 24) or 0xFFFFFF
+        }
+        val bmp = Bitmap.createBitmap(n, n, Bitmap.Config.ARGB_8888)
+        bmp.setPixels(px, 0, n, 0, 0, n, n)
+        bmp.asImageBitmap()
+    }
 }
 
 private fun DrawScope.drawPass(p: InkPass, rgb: Color, blend: BlendMode) {
@@ -169,19 +252,44 @@ private fun DrawScope.drawPass(p: InkPass, rgb: Color, blend: BlendMode) {
     for (t in p.tips) drawCircle(c, t.second, t.first, blendMode = blend)
 }
 
+private fun DrawScope.drawDabs(dabs: List<Stamp>, hardness: Float, flow: Float, rgb: Color, blend: BlendMode) {
+    val img = dabImage(hardness)
+    val filter = ColorFilter.tint(rgb, BlendMode.SrcIn)
+    for (d in dabs) {
+        val k = d.size / 64f
+        withTransform({ translate(d.x - d.size / 2f, d.y - d.size / 2f); scale(k, k, Offset.Zero) }) {
+            drawImage(img, alpha = flow, colorFilter = filter, blendMode = blend)
+        }
+    }
+}
+
 private fun DrawScope.drawRender(r: InkRender, rgb: Color, blend: BlendMode) {
+    val dabs = r.dabs
+    val lines = r.lines
     val buckets = r.stampBuckets
-    if (buckets != null) {
+    if (dabs != null) {
+        drawDabs(dabs, r.dabHardness, r.dabFlow, rgb, blend)
+    } else if (lines != null) {
+        for (l in lines) {
+            drawPath(l.path, rgb.copy(alpha = l.alpha), style = Stroke(width = l.width, cap = StrokeCap.Round, join = StrokeJoin.Round), blendMode = blend)
+        }
+    } else if (buckets != null) {
         for (b in buckets) drawPath(b.second, rgb.copy(alpha = b.first), blendMode = blend)
     } else {
         for (p in r.passes) drawPass(p, rgb, blend)
     }
 }
 
+/** Grão do papel: mantém o traço só onde a textura (fixa na folha) tem opacidade. */
+private fun DrawScope.drawGrain(strength: Float, r: Rect) {
+    val shader = ImageShader(grainImage(strength), TileMode.Repeated, TileMode.Repeated)
+    drawRect(ShaderBrush(shader), r.topLeft, r.size, blendMode = BlendMode.DstIn)
+}
+
 /**
- * Desenha um traço. A opacidade vem do alfa da cor; a borracha usa DstOut (apaga proporcionalmente ao alfa).
- * Com opacidade < 100% ou modo "dentro"/"por trás" as peças são desenhadas opacas numa camada e a camada
- * é composta com o alfa e o modo, para não escurecer onde as peças se sobrepõem.
+ * Desenha um traço. A opacidade vem do alfa da cor; a borracha usa DstOut. Com opacidade < 100%, modo
+ * "dentro"/"por trás", toques suaves ou grão, as peças são desenhadas numa camada que depois recebe o alfa, o
+ * modo e o grão, para não escurecer onde as peças se sobrepõem.
  */
 internal fun DrawScope.drawInk(s: BrushStroke, tint: Color?, useCache: Boolean) {
     if (s.points.isEmpty()) return
@@ -196,23 +304,25 @@ internal fun DrawScope.drawInk(s: BrushStroke, tint: Color?, useCache: Boolean) 
         s.mode == 2 -> BlendMode.DstOver
         else -> BlendMode.SrcOver
     }
-    val needLayer = alpha < 0.999f || (!s.erase && s.mode != 0)
+    val needLayer = alpha < 0.999f || (!s.erase && s.mode != 0) || render.dabs != null || render.grain > 0f
     if (!needLayer) {
         drawRender(render, rgb, if (s.erase) BlendMode.DstOut else BlendMode.SrcOver)
         return
     }
     val b = s.bounds() ?: return
     val pad = s.width + 2f
+    val rect = Rect(b.minX - pad, b.minY - pad, b.maxX + pad, b.maxY + pad)
     val paint = Paint()
     paint.alpha = alpha
     paint.blendMode = layerBlend
-    drawContext.canvas.saveLayer(Rect(b.minX - pad, b.minY - pad, b.maxX + pad, b.maxY + pad), paint)
+    drawContext.canvas.saveLayer(rect, paint)
     drawRender(render, rgb, BlendMode.SrcOver)
+    if (render.grain > 0f) drawGrain(render.grain, rect)
     drawContext.canvas.restore()
 }
 
 // ---------------------------------------------------------------------------------------------
-// Preenchimentos (balde)
+// Preenchimentos (balde), máscaras de borracha e imagens (seleção do laço, importação)
 // ---------------------------------------------------------------------------------------------
 
 private fun fillBitmap(f: FillRegion, argb: Int): ImageBitmap {
@@ -224,26 +334,37 @@ private fun fillBitmap(f: FillRegion, argb: Int): ImageBitmap {
     return bmp.asImageBitmap()
 }
 
+/** Desenha a máscara com transformação exata (sem arredondar para pixels), como cor ou como borracha. */
 internal fun DrawScope.drawFillElement(s: BrushStroke, tint: Color?, useCache: Boolean) {
     val f = s.fill ?: return
     val cached = f.cache as? ImageBitmap
     val img = cached ?: fillBitmap(f, s.colorArgb).also { if (useCache) f.cache = it }
     val filter = if (tint != null) ColorFilter.tint(tint, BlendMode.SrcIn) else null
-    drawImage(
-        img,
-        srcOffset = IntOffset.Zero,
-        srcSize = IntSize(f.w, f.h),
-        dstOffset = IntOffset((f.x * f.unit).roundToInt(), (f.y * f.unit).roundToInt()),
-        dstSize = IntSize((f.w * f.unit).roundToInt().coerceAtLeast(1), (f.h * f.unit).roundToInt().coerceAtLeast(1)),
-        colorFilter = filter,
-    )
+    val blend = if (s.erase) BlendMode.DstOut else BlendMode.SrcOver
+    withTransform({ translate(f.x * f.unit, f.y * f.unit); scale(f.unit, f.unit, Offset.Zero) }) {
+        drawImage(img, colorFilter = filter, blendMode = blend)
+    }
+}
+
+private fun decodePng(png: ByteArray): ImageBitmap? = BitmapFactory.decodeByteArray(png, 0, png.size)?.asImageBitmap()
+
+internal fun DrawScope.drawImageData(im: ImageData, tint: Color?, useCache: Boolean) {
+    val cached = im.source.cache as? ImageBitmap
+    val img = cached ?: (decodePng(im.source.png)?.also { if (useCache) im.source.cache = it }) ?: return
+    val m = im.m
+    val matrix = Matrix(floatArrayOf(m.a, m.b, 0f, 0f, m.c, m.d, 0f, 0f, 0f, 0f, 1f, 0f, m.tx, m.ty, 0f, 1f))
+    val filter = if (tint != null) ColorFilter.tint(tint, BlendMode.SrcIn) else null
+    withTransform({ transform(matrix) }) { drawImage(img, colorFilter = filter) }
 }
 
 internal fun DrawScope.drawElement(s: BrushStroke, tint: Color?, useCache: Boolean) {
-    if (s.fill != null) drawFillElement(s, tint, useCache) else drawInk(s, tint, useCache)
+    val im = s.image
+    if (im != null) drawImageData(im, tint, useCache)
+    else if (s.fill != null) drawFillElement(s, tint, useCache)
+    else drawInk(s, tint, useCache)
 }
 
-/** Elementos de um desenho; os selecionados (laço) saem com a transformação de pré-visualização. */
+/** Elementos de um desenho, pela ordem em que foram feitos. */
 internal fun DrawScope.drawElements(
     strokes: List<BrushStroke>,
     tint: Color?,
@@ -292,6 +413,15 @@ internal fun DrawScope.drawFrameLayers(
         if (live != null && hasLive) drawElement(live, tint, false)
         drawContext.canvas.restore()
     }
+}
+
+/** Onion skin: o frame vizinho desenhado numa só camada colorida com opacidade [alpha] (uma composição por frame). */
+internal fun DrawScope.drawOnionFrame(project: Project, frameId: Long, sw: Float, sh: Float, tint: Color, alpha: Float) {
+    val paint = Paint()
+    paint.alpha = alpha
+    drawContext.canvas.saveLayer(Rect(0f, 0f, sw, sh), paint)
+    drawFrameLayers(project, frameId, sw, sh, LayerKind.DRAWING, tint.copy(alpha = 1f), true)
+    drawContext.canvas.restore()
 }
 
 /** Miniatura de um desenho (para as células da timeline). O DrawScope deve ter o tamanho da miniatura. */
