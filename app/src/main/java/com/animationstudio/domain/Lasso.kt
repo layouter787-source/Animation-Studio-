@@ -10,6 +10,8 @@ data class Bounds(val minX: Float, val minY: Float, val maxX: Float, val maxY: F
 }
 
 fun BrushStroke.bounds(): Bounds? {
+    val im = image
+    if (im != null) return im.bounds()
     val f = fill
     if (f != null) return Bounds(f.x * f.unit, f.y * f.unit, (f.x + f.w) * f.unit, (f.y + f.h) * f.unit)
     if (points.isEmpty()) return null
@@ -20,7 +22,7 @@ fun BrushStroke.bounds(): Bounds? {
     )
 }
 
-/** Seleção por laço: um traço entra se pelo menos metade dos pontos está dentro; um preenchimento se o centro da caixa está. */
+/** Geometria do laço: ponto dentro de polígono e polígonos dos modos retângulo e elipse. */
 object Lasso {
     fun pointInPolygon(p: Point, poly: List<Point>): Boolean {
         var inside = false
@@ -34,11 +36,25 @@ object Lasso {
         return inside
     }
 
+    fun rectangle(a: Point, b: Point): List<Point> =
+        listOf(Point(a.x, a.y), Point(b.x, a.y), Point(b.x, b.y), Point(a.x, b.y))
+
+    fun ellipse(a: Point, b: Point, steps: Int = 48): List<Point> {
+        val cx = (a.x + b.x) / 2f
+        val cy = (a.y + b.y) / 2f
+        val rx = kotlin.math.abs(b.x - a.x) / 2f
+        val ry = kotlin.math.abs(b.y - a.y) / 2f
+        return List(steps) { i ->
+            val t = 2.0 * Math.PI * i / steps
+            Point(cx + (kotlin.math.cos(t) * rx).toFloat(), cy + (kotlin.math.sin(t) * ry).toFloat())
+        }
+    }
+
     fun select(strokes: List<BrushStroke>, polygon: List<Point>): Set<Int> {
         if (polygon.size < 3) return emptySet()
         val out = LinkedHashSet<Int>()
         strokes.forEachIndexed { i, s ->
-            if (s.fill != null) {
+            if (s.fill != null || s.image != null) {
                 val b = s.bounds()
                 if (b != null && pointInPolygon(Point(b.cx, b.cy), polygon)) out.add(i)
             } else if (s.points.isNotEmpty()) {

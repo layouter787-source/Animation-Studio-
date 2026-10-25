@@ -1,14 +1,18 @@
 package com.animationstudio.data
 
+import com.animationstudio.domain.Affine
 import com.animationstudio.domain.BrushStroke
 import com.animationstudio.domain.Drawing
 import com.animationstudio.domain.FillRegion
+import com.animationstudio.domain.ImageData
+import com.animationstudio.domain.ImageSource
 import com.animationstudio.domain.Layer
 import com.animationstudio.domain.LayerKind
 import com.animationstudio.domain.Point
 import com.animationstudio.domain.Project
 import org.json.JSONArray
 import org.json.JSONObject
+import java.util.Base64
 
 data class ProjectMeta(
     val id: String,
@@ -99,6 +103,22 @@ object ProjectJson {
             fo.put("r", ra)
             so.put("f", fo)
         }
+        val im = s.image
+        if (im != null) {
+            val io = JSONObject()
+            io.put("w", im.source.w)
+            io.put("h", im.source.h)
+            io.put("png", Base64.getEncoder().encodeToString(im.source.png))
+            val m = JSONArray()
+            m.put(im.m.a.toDouble())
+            m.put(im.m.b.toDouble())
+            m.put(im.m.c.toDouble())
+            m.put(im.m.d.toDouble())
+            m.put(im.m.tx.toDouble())
+            m.put(im.m.ty.toDouble())
+            io.put("m", m)
+            so.put("i", io)
+        }
         return so
     }
 
@@ -112,6 +132,19 @@ object ProjectJson {
             val runs = List(ra.length()) { ra.getInt(it) }
             fill = FillRegion(fo.getInt("x"), fo.getInt("y"), fo.getInt("w"), fo.getInt("h"), fo.getDouble("u").toFloat(), runs)
         }
+        var image: ImageData? = null
+        if (so.has("i")) {
+            val io = so.getJSONObject("i")
+            val m = io.getJSONArray("m")
+            val png = Base64.getDecoder().decode(io.getString("png"))
+            image = ImageData(
+                ImageSource(png, io.getInt("w"), io.getInt("h")),
+                Affine(
+                    m.getDouble(0).toFloat(), m.getDouble(1).toFloat(), m.getDouble(2).toFloat(),
+                    m.getDouble(3).toFloat(), m.getDouble(4).toFloat(), m.getDouble(5).toFloat(),
+                ),
+            )
+        }
         return BrushStroke(
             points = pts,
             colorArgb = so.getInt("c"),
@@ -122,6 +155,7 @@ object ProjectJson {
             hardness = if (so.has("k")) so.getDouble("k").toFloat() else 1f,
             brush = if (so.has("b")) so.getString("b") else "",
             mode = if (so.has("m")) so.getInt("m") else 0,
+            image = image,
         )
     }
 

@@ -11,6 +11,16 @@ data class Affine(val a: Float, val b: Float, val c: Float, val d: Float, val tx
 
     val scaleFactor: Float get() = sqrt(abs(a * d - b * c))
 
+    /** Composição: aplica primeiro [o] e depois esta transformação. */
+    fun times(o: Affine): Affine = Affine(
+        a * o.a + c * o.b,
+        b * o.a + d * o.b,
+        a * o.c + c * o.d,
+        b * o.c + d * o.d,
+        a * o.tx + c * o.ty + tx,
+        b * o.tx + d * o.ty + ty,
+    )
+
     fun inverse(): Affine? {
         val det = a * d - b * c
         if (abs(det) < 1e-9f) return null
@@ -23,6 +33,14 @@ data class Affine(val a: Float, val b: Float, val c: Float, val d: Float, val tx
 
     companion object {
         val IDENTITY = Affine(1f, 0f, 0f, 1f, 0f, 0f)
+
+        fun translate(dx: Float, dy: Float) = Affine(1f, 0f, 0f, 1f, dx, dy)
+
+        /** Espelho horizontal em torno da reta vertical x = [px]. */
+        fun flipH(px: Float) = Affine(-1f, 0f, 0f, 1f, 2f * px, 0f)
+
+        /** Espelho vertical em torno da reta horizontal y = [py]. */
+        fun flipV(py: Float) = Affine(1f, 0f, 0f, -1f, 0f, 2f * py)
 
         /** p' = R(rot)·S(scale)·(p − pivot) + pivot + (dx, dy). Rotação positiva = horária no ecrã (y para baixo). */
         fun around(pivot: Point, scale: Float, rotationRad: Float, dx: Float, dy: Float): Affine {

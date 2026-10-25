@@ -2,6 +2,7 @@ package com.animationstudio.domain
 
 import kotlin.math.ceil
 import kotlin.math.hypot
+import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.sqrt
 
@@ -10,6 +11,9 @@ class RibbonShape(val polygon: List<Point>, val tip: Point, val tipRadius: Float
 
 /** Corpo uniforme (polilinha densa) + pontas afiladas opcionais. [radius] = metade da espessura. */
 class StrokeShape(val body: List<Point>, val start: RibbonShape?, val end: RibbonShape?, val radius: Float)
+
+/** Linhas paralelas ao longo do traço (pincéis de linhas múltiplas e de cerdas). */
+class ParallelLines(val lineWidth: Float, val lines: List<List<Point>>)
 
 object StrokeGeometry {
     /** Amostras densas (a cada ~[step]) da curva suave que passa pelos pontos (Béziers com alças limitadas a 1/3). */
@@ -88,7 +92,8 @@ object StrokeGeometry {
         val q = sl.pts
         if (q.size < 2) return null
         val last = q.size - 1
-        val radii = FloatArray(q.size) { i -> r * (1f - taper * 0.85f * (1f - smooth(distFromTip(sl.cums[i]) / taperLen))) }
+        // Ponta quase em ponto (3% do raio) e curva suave até à largura total.
+        val radii = FloatArray(q.size) { i -> r * (1f - taper * 0.97f * (1f - smooth(distFromTip(sl.cums[i]) / taperLen))) }
         val left = ArrayList<Point>()
         val right = ArrayList<Point>()
         for (i in q.indices) {
@@ -118,11 +123,37 @@ object StrokeGeometry {
         for (i in 1 until s.size) cum[i] = cum[i - 1] + hypot(s[i].x - s[i - 1].x, s[i].y - s[i - 1].y)
         val total = cum[s.size - 1]
         val t = taper.coerceIn(0f, 1f)
-        val taperLen = min(total / 2.2f, width * 2.2f)
+        // Canetas finas têm pontas mais compridas (até ~5,7× a espessura); pincéis grossos, mais curtas.
+        val taperLen = min(total / 2.4f, width * (2.2f + 3.5f * (1f - min(width / 12f, 1f))))
         if (t < 0.05f || taperLen < width * 0.6f) return StrokeShape(s, null, null, r)
         val body = slice(s, cum, taperLen, total - taperLen).pts
         val start = ribbon(slice(s, cum, 0f, taperLen), { d -> d }, true, r, taperLen, t)
         val end = ribbon(slice(s, cum, total - taperLen, total), { d -> total - d }, false, r, taperLen, t)
         return StrokeShape(body, start, end, r)
+    }
+
+    /** [lines] polilinhas paralelas distribuídas pela espessura (para linha dupla, tripla, cerdas…). */
+    fun parallel(points: List<Point>, width: Float, lines: Int): ParallelLines {
+        val n = max(1, lines)
+        val lw = if (n <= 5) max(1f, width * 0.1f) else max(0.8f, width / n * 0.85f)
+        if (points.size < 2) return ParallelLines(lw, List(n) { points })
+        val s = sample(points, (lw * 1.5f).coerceIn(0.5f, 4f))
+        val span = max(0f, width - lw)
+        val out = List(n) { ArrayList<Point>(s.size) }
+        for (i in s.indices) {
+            val a = s[max(i - 1, 0)]
+            val b = s[min(i + 1, s.size - 1)]
+            var tx = b.x - a.x
+            var ty = b.y - a.y
+            val len = hypot(tx, ty)
+            if (len > 0f) { tx /= len; ty /= len }
+            val nx = -ty
+            val ny = tx
+            for (k in 0 until n) {
+                val off = if (n == 1) 0f else (k / (n - 1f) - 0.5f) * span
+                out[k].add(Point(s[i].x + nx * off, s[i].y + ny * off))
+            }
+        }
+        return ParallelLines(lw, out)
     }
 }

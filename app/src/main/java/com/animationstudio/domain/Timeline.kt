@@ -1,6 +1,6 @@
 package com.animationstudio.domain
 
-/** Elemento de um desenho: traço de pincel/borracha ou preenchimento (balde) em máscara. */
+/** Elemento de um desenho: traço de pincel/borracha, preenchimento (balde) ou imagem (seleção/importação). */
 data class BrushStroke(
     val points: List<Point>,
     val colorArgb: Int,
@@ -15,12 +15,15 @@ data class BrushStroke(
     val brush: String = "",
     /** 0 = normal, 1 = só dentro do desenho existente, 2 = por trás do desenho existente. */
     val mode: Int = 0,
+    val image: ImageData? = null,
 ) {
     /** Cache de renderização da UI. Não entra em equals/hashCode/copy. */
     var renderCache: Any? = null
 
     /** Aplica uma transformação. Devolve null se o preenchimento não puder ser reamostrado. */
     fun transformed(m: Affine): BrushStroke? {
+        val im = image
+        if (im != null) return copy(image = im.transformed(m))
         val f = fill
         if (f != null) {
             val nf = f.transformed(m) ?: return null
