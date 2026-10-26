@@ -14,6 +14,7 @@ import androidx.compose.foundation.gestures.calculateCentroid
 import androidx.compose.foundation.gestures.calculatePan
 import androidx.compose.foundation.gestures.calculateRotation
 import androidx.compose.foundation.gestures.calculateZoom
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -23,6 +24,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
@@ -66,7 +68,11 @@ import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import com.animationstudio.data.ProjectMeta
 import com.animationstudio.data.ProjectStore
+import com.animationstudio.domain.Affine
 import com.animationstudio.domain.BrushLibrary
+import com.animationstudio.domain.BrushStroke
+import com.animationstudio.domain.ImageData
+import com.animationstudio.domain.Lasso
 import com.animationstudio.domain.LayerKind
 import com.animationstudio.domain.PlayMode
 import com.animationstudio.domain.Point
@@ -83,6 +89,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlin.math.atan2
 import kotlin.math.hypot
 import kotlin.math.roundToInt
 
@@ -108,15 +115,43 @@ private fun DrawTransform.applyView(v: ViewTransform) {
     scale(v.scale, v.scale, Offset.Zero)
 }
 
-private fun selTransform(pivot: Offset, dx: Float, dy: Float, deg: Float, scale: Float): (DrawTransform) -> Unit = { t ->
-    t.translate(dx, dy)
-    t.rotate(deg, pivot)
-    t.scale(scale, scale, pivot)
-}
-
 private fun Offset.toPoint() = Point(x, y)
 
 private fun isPen(c: PointerInputChange): Boolean = c.type == PointerType.Stylus || c.type == PointerType.Eraser
+
+/** Pega de rotação: acima do meio do lado de cima da imagem, a [dist] (unidades da folha). */
+private fun rotateHandleProject(f: ImageData, dist: Float): Point {
+    val c = f.corners()
+    val top = Point((c[0].x + c[1].x) / 2f, (c[0].y + c[1].y) / 2f)
+    val bottom = Point((c[3].x + c[2].x) / 2f, (c[3].y + c[2].y) / 2f)
+    var ux = top.x - bottom.x
+    var uy = top.y - bottom.y
+    val l = hypot(ux, uy)
+    if (l > 0f) { ux /= l; uy /= l }
+    return Point(top.x + ux * dist, top.y + uy * dist)
+}
+
+/** 0 = fora, 1 = corpo (mover), 2 = canto (escalar), 3 = pega de rotação. */
+private fun hitFloating(f: ImageData, v: ViewTransform, pos: Offset, slop: Float): Int {
+    val handle = v.projectToScreen(rotateHandleProject(f, slop / v.scale))
+    if (hypot(pos.x - handle.x, pos.y - handle.y) <= slop) return 3
+    val corners = f.corners().map { v.projectToScreen(it) }
+    for (c in corners) if (hypot(pos.x - c.x, pos.y - c.y) <= slop) return 2
+    return if (Lasso.pointInPolygon(Point(pos.x, pos.y), corners)) 1 else 0
+}
+
+/** Balde com fecho automático de frestas: se o preenchimento sair a cobrir quase a folha toda, repete com frestas maiores. */
+private fun fillWithRetry(project: Project, sw: Int, sh: Int, p: Point, color: Int, gap0: Int, grow: Int): BrushStroke? {
+    var gap = gap0
+    var best: BrushStroke? = null
+    for (attempt in 0..2) {
+        val r = computeFill(project, sw, sh, p.x, p.y, color, gap, grow) ?: return best
+        best = r
+        if (fillCoverage(r, sw, sh) < 0.85f || gap >= 24) return r
+        gap = (gap * 2).coerceIn(8, 24)
+    }
+    return best
+}
 
 private suspend fun persist(store: ProjectStore, meta: ProjectMeta, fps: Int, project: Project): Boolean =
     withContext(Dispatchers.IO) {
@@ -183,13 +218,12 @@ fun AnimationEditor(meta: ProjectMeta, initial: Project, store: ProjectStore, on
     fun soon(what: String) = toast("$what: em desenvolvimento")
     fun close() {
         scope.launch {
+            st.commitFloating()
             if (!persist(store, curMeta, fps, st.project)) toast("Não foi possível guardar o projeto")
             onClose()
         }
     }
 
-    // Balde: corre fora da thread principal. (A causa do erro anterior: o pedido era reposto a null dentro
-    // do próprio efeito que o observava, o que cancelava o trabalho e mostrava "não foi possível preencher".)
     fun requestFill(p: Point) {
         if (st.busyFill) return
         val snapshot = st.project
@@ -201,7 +235,7 @@ fun AnimationEditor(meta: ProjectMeta, initial: Project, store: ProjectStore, on
         st.busyFill = true
         scope.launch {
             val region = try {
-                withContext(Dispatchers.Default) { computeFill(snapshot, sheetW, sheetH, p.x, p.y, st.colorArgb, st.bucketGap, st.bucketGrow) }
+                withContext(Dispatchers.Default) { fillWithRetry(snapshot, sheetW, sheetH, p, st.colorArgb, st.bucketGap, st.bucketGrow) }
             } catch (e: CancellationException) {
                 st.busyFill = false
                 throw e
@@ -211,6 +245,35 @@ fun AnimationEditor(meta: ProjectMeta, initial: Project, store: ProjectStore, on
             st.busyFill = false
             if (region == null) toast("Toque numa área dentro da folha, fora das linhas")
             else if (st.project.currentFrameId == snapshot.currentFrameId) st.edit { it.addFill(st.activeLayerId, region) }
+        }
+    }
+
+    fun requestLift(poly: List<Point>) {
+        if (st.busyLift) return
+        val layer = st.project.layers.firstOrNull { it.id == st.activeLayerId }
+        if (layer == null || !layer.visible) {
+            toast("Escolha uma camada visível para selecionar")
+            return
+        }
+        val snapshot = st.project
+        val layerId = st.activeLayerId
+        st.busyLift = true
+        scope.launch {
+            val res = try {
+                withContext(Dispatchers.Default) { liftSelection(snapshot, layerId, sheetW, sheetH, poly) }
+            } catch (e: CancellationException) {
+                st.busyLift = false
+                throw e
+            } catch (e: Throwable) {
+                null
+            }
+            st.busyLift = false
+            if (res == null) {
+                toast("Nada para selecionar nessa área da camada ativa")
+            } else if (st.project.currentFrameId == snapshot.currentFrameId) {
+                st.edit { it.addStroke(layerId, res.eraser) }
+                st.beginFloating(res.image, layerId)
+            }
         }
     }
 
@@ -334,56 +397,61 @@ fun AnimationEditor(meta: ProjectMeta, initial: Project, store: ProjectStore, on
                             drawRect(Color.Black, topLeft = Offset.Zero, size = Size(sw, sh), style = Stroke(width = 1f / v.scale))
                         }
                     }
-                    // Cenário, onion skin, camadas de desenho, grelha e seleção do laço.
+                    // Cenário, onion skin, camadas de desenho, seleção flutuante, grelha.
                     Canvas(Modifier.fillMaxSize().graphicsLayer { compositingStrategy = CompositingStrategy.Offscreen }) {
                         val v = st.view
                         val proj = st.project
                         val fid = proj.currentFrameId
                         val live = if (st.isInkTool && st.activePoints.isNotEmpty()) st.makeStroke(st.activePoints.toList()) else null
-                        val sel = st.selection
-                        val selActive = sel != null && sel.frameId == fid
-                        val selT: ((DrawTransform) -> Unit)? = if (sel != null && selActive) {
-                            selTransform(Offset(sel.bounds.cx, sel.bounds.cy), st.selDx, st.selDy, Math.toDegrees(st.selRot.toDouble()).toFloat(), st.selScale)
-                        } else null
-                        val selLayer = if (sel != null && selActive) sel.layerId else -1L
-                        val selIdx = if (sel != null && selActive) sel.indices else null
+                        val fl = st.floating
+                        val dash = PathEffect.dashPathEffect(floatArrayOf(10f / v.scale, 6f / v.scale))
                         withTransform({ applyView(v) }) {
                             clipRect(0f, 0f, sw, sh) {
-                                drawFrameLayers(proj, fid, sw, sh, LayerKind.SCENERY, null, true, live, st.activeLayerId, selLayer, selIdx, selT)
+                                drawFrameLayers(proj, fid, sw, sh, LayerKind.SCENERY, null, true, live, st.activeLayerId)
                                 if (st.onionOn && !st.playing) {
                                     val cur = proj.currentFrame
                                     for (k in st.onionBefore downTo 1) {
                                         val i = cur - k
-                                        if (i >= 0) drawFrameLayers(proj, proj.frameIds[i], sw, sh, LayerKind.DRAWING, StudioColors.Rose.copy(alpha = 0.34f / k), true)
+                                        if (i >= 0) drawOnionFrame(proj, proj.frameIds[i], sw, sh, StudioColors.Rose, 0.34f / k)
                                     }
                                     for (k in st.onionAfter downTo 1) {
                                         val i = cur + k
-                                        if (i < proj.frameCount) drawFrameLayers(proj, proj.frameIds[i], sw, sh, LayerKind.DRAWING, StudioColors.Mint.copy(alpha = 0.34f / k), true)
+                                        if (i < proj.frameCount) drawOnionFrame(proj, proj.frameIds[i], sw, sh, StudioColors.Mint, 0.34f / k)
                                     }
                                 }
-                                drawFrameLayers(proj, fid, sw, sh, LayerKind.DRAWING, null, true, live, st.activeLayerId, selLayer, selIdx, selT)
+                                drawFrameLayers(proj, fid, sw, sh, LayerKind.DRAWING, null, true, live, st.activeLayerId)
+                                if (fl != null) drawImageData(fl, null, true)
                                 drawGridOverlay(st.gridType, st.gridCell, sw, sh, Color(0xFF3DA5FF).copy(alpha = 0.55f), 1f / v.scale)
-                                val dash = PathEffect.dashPathEffect(floatArrayOf(10f / v.scale, 6f / v.scale))
-                                if (sel != null && selActive) {
-                                    val b = sel.bounds
-                                    withTransform({ selT?.invoke(this) }) {
-                                        drawRect(
-                                            StudioColors.Accent, Offset(b.minX, b.minY), Size(b.maxX - b.minX, b.maxY - b.minY),
-                                            style = Stroke(width = 2f / v.scale, pathEffect = dash)
-                                        )
-                                    }
+                            }
+                            if (fl != null) {
+                                val cs = fl.corners()
+                                val outline = Path()
+                                outline.moveTo(cs[0].x, cs[0].y)
+                                for (i in 1..3) outline.lineTo(cs[i].x, cs[i].y)
+                                outline.close()
+                                drawPath(outline, StudioColors.Accent, style = Stroke(width = 2f / v.scale, pathEffect = dash))
+                                val hr = 7f / v.scale
+                                for (c in cs) {
+                                    drawCircle(Color.White, hr, Offset(c.x, c.y))
+                                    drawCircle(StudioColors.Accent, hr, Offset(c.x, c.y), style = Stroke(width = 2f / v.scale))
                                 }
-                                if (st.tool == Tool.LASSO && st.activePoints.size > 1) {
-                                    val path = Path()
-                                    val pts = st.activePoints.toList()
-                                    path.moveTo(pts[0].x, pts[0].y)
-                                    for (i in 1 until pts.size) path.lineTo(pts[i].x, pts[i].y)
-                                    drawPath(path, StudioColors.Accent, style = Stroke(width = 2f / v.scale, pathEffect = dash))
-                                }
+                                val rh = rotateHandleProject(fl, 28f / v.scale)
+                                val top = Offset((cs[0].x + cs[1].x) / 2f, (cs[0].y + cs[1].y) / 2f)
+                                drawLine(StudioColors.Accent, top, Offset(rh.x, rh.y), strokeWidth = 2f / v.scale)
+                                drawCircle(Color.White, hr, Offset(rh.x, rh.y))
+                                drawCircle(StudioColors.Accent, hr, Offset(rh.x, rh.y), style = Stroke(width = 2f / v.scale))
+                            }
+                            if (st.tool == Tool.LASSO && st.activePoints.size > 1) {
+                                val path = Path()
+                                val pts = st.activePoints.toList()
+                                path.moveTo(pts[0].x, pts[0].y)
+                                for (i in 1 until pts.size) path.lineTo(pts[i].x, pts[i].y)
+                                path.close()
+                                drawPath(path, StudioColors.Accent, style = Stroke(width = 2f / v.scale, pathEffect = dash))
                             }
                         }
                     }
-                    // Entrada: 1 dedo/caneta usa a ferramenta; 2 dedos navegam (ou transformam a seleção).
+                    // Entrada: 1 dedo/caneta usa a ferramenta; 2 dedos navegam (ou transformam a seleção flutuante).
                     Box(
                         Modifier.fillMaxSize().pointerInput(Unit) {
                             awaitEachGesture {
@@ -393,11 +461,18 @@ fun AnimationEditor(meta: ProjectMeta, initial: Project, store: ProjectStore, on
                                     return@awaitEachGesture
                                 }
                                 val tool = st.tool
-                                val sel = st.selection
                                 val downIsPen = isPen(down)
                                 val navOnly = st.penOnly && !downIsPen
                                 val inkTool = st.isInkTool
-                                val lassoDraw = tool == Tool.LASSO && sel == null
+                                var floatMode = 0
+                                if (tool == Tool.LASSO && !navOnly) {
+                                    val f0 = st.floating
+                                    if (f0 != null) {
+                                        floatMode = hitFloating(f0, st.view, down.position, 26.dp.toPx())
+                                        if (floatMode == 0) st.commitFloating()
+                                    }
+                                }
+                                val lassoDraw = tool == Tool.LASSO && st.floating == null && !navOnly
                                 val stab = if (inkTool && !navOnly) StrokeStabilizer(st.stabilizer) else null
                                 var drawing = !navOnly && (inkTool || lassoDraw)
                                 var multi = false
@@ -405,7 +480,8 @@ fun AnimationEditor(meta: ProjectMeta, initial: Project, store: ProjectStore, on
                                 var rejected = false
                                 val downPos = down.position
                                 var lastScreen = downPos
-                                var lastRaw = st.view.screenToProject(downPos.toPoint())
+                                var lastRawS = Point(downPos.x, downPos.y)
+                                val startProj = st.view.screenToProject(Point(downPos.x, downPos.y))
 
                                 fun pushPoint(p: Point) {
                                     val last = st.activePoints.lastOrNull()
@@ -413,7 +489,10 @@ fun AnimationEditor(meta: ProjectMeta, initial: Project, store: ProjectStore, on
                                 }
 
                                 st.activePoints.clear()
-                                if (drawing) st.activePoints.add(if (stab != null) stab.start(lastRaw) else lastRaw)
+                                if (drawing) {
+                                    val first = if (stab != null) stab.start(lastRawS, down.uptimeMillis) else lastRawS
+                                    st.activePoints.add(st.view.screenToProject(first))
+                                }
                                 down.consume()
                                 do {
                                     val event = awaitPointerEvent()
@@ -439,19 +518,17 @@ fun AnimationEditor(meta: ProjectMeta, initial: Project, store: ProjectStore, on
                                         if (c.isSpecified) {
                                             val pan = event.calculatePan()
                                             val zoom = event.calculateZoom()
-                                            val rotDeg = event.calculateRotation()
-                                            if (pressedCount >= 2 && tool == Tool.LASSO && sel != null && st.selMode == SelMode.TRANSFORM) {
-                                                val cur = st.view.screenToProject(c.toPoint())
+                                            val rotRad = Math.toRadians(event.calculateRotation().toDouble()).toFloat()
+                                            val fl = st.floating
+                                            if (pressedCount >= 2 && tool == Tool.LASSO && fl != null) {
+                                                val cur = st.view.screenToProject(Point(c.x, c.y))
                                                 val prev = st.view.screenToProject(Point(c.x - pan.x, c.y - pan.y))
-                                                st.selDx += cur.x - prev.x
-                                                st.selDy += cur.y - prev.y
-                                                st.selScale = (st.selScale * zoom).coerceIn(0.05f, 40f)
-                                                st.selRot += Math.toRadians(rotDeg.toDouble()).toFloat()
+                                                st.floating = fl.transformed(Affine.around(cur, zoom.coerceIn(0.5f, 2f), rotRad, cur.x - prev.x, cur.y - prev.y))
                                             } else {
-                                                val focus = c.toPoint()
+                                                val focus = Point(c.x, c.y)
                                                 var v = st.view.panBy(pan.x, pan.y)
                                                 v = v.zoomAround(focus, zoom)
-                                                v = v.rotateAround(focus, Math.toRadians(rotDeg.toDouble()).toFloat())
+                                                v = v.rotateAround(focus, rotRad)
                                                 st.view = v
                                             }
                                         }
@@ -461,20 +538,42 @@ fun AnimationEditor(meta: ProjectMeta, initial: Project, store: ProjectStore, on
                                             if ((ch.position - downPos).getDistance() > 12f) moved = true
                                             if (drawing && !multi) {
                                                 if (stab != null) {
+                                                    // Estabiliza em pixels de ecrã e só depois converte para a folha.
                                                     for (h in ch.historical) {
-                                                        lastRaw = st.view.screenToProject(h.position.toPoint())
-                                                        pushPoint(stab.next(lastRaw))
+                                                        lastRawS = Point(h.position.x, h.position.y)
+                                                        pushPoint(st.view.screenToProject(stab.next(lastRawS, h.uptimeMillis)))
                                                     }
-                                                    lastRaw = st.view.screenToProject(ch.position.toPoint())
-                                                    pushPoint(stab.next(lastRaw))
+                                                    lastRawS = Point(ch.position.x, ch.position.y)
+                                                    pushPoint(st.view.screenToProject(stab.next(lastRawS, ch.uptimeMillis)))
                                                 } else {
-                                                    pushPoint(st.view.screenToProject(ch.position.toPoint()))
+                                                    val raw = st.view.screenToProject(Point(ch.position.x, ch.position.y))
+                                                    when (st.lassoShape) {
+                                                        LassoShape.FREE -> pushPoint(raw)
+                                                        LassoShape.RECT -> { st.activePoints.clear(); st.activePoints.addAll(Lasso.rectangle(startProj, raw)) }
+                                                        LassoShape.ELLIPSE -> { st.activePoints.clear(); st.activePoints.addAll(Lasso.ellipse(startProj, raw)) }
+                                                    }
                                                 }
-                                            } else if (tool == Tool.LASSO && sel != null && st.selMode == SelMode.MOVE && !multi && !navOnly) {
-                                                val a = st.view.screenToProject(lastScreen.toPoint())
-                                                val b = st.view.screenToProject(ch.position.toPoint())
-                                                st.selDx += b.x - a.x
-                                                st.selDy += b.y - a.y
+                                            } else if (floatMode != 0 && !multi) {
+                                                val fl = st.floating
+                                                if (fl != null) {
+                                                    val cur = st.view.screenToProject(Point(ch.position.x, ch.position.y))
+                                                    val prev = st.view.screenToProject(Point(lastScreen.x, lastScreen.y))
+                                                    val b = fl.bounds()
+                                                    val cc = Point(b.cx, b.cy)
+                                                    when (floatMode) {
+                                                        1 -> st.floating = fl.transformed(Affine.translate(cur.x - prev.x, cur.y - prev.y))
+                                                        2 -> {
+                                                            val d0 = hypot(prev.x - cc.x, prev.y - cc.y)
+                                                            val d1 = hypot(cur.x - cc.x, cur.y - cc.y)
+                                                            if (d0 > 0.001f) st.floating = fl.transformed(Affine.around(cc, (d1 / d0).coerceIn(0.5f, 2f), 0f, 0f, 0f))
+                                                        }
+                                                        3 -> {
+                                                            val a0 = atan2(prev.y - cc.y, prev.x - cc.x)
+                                                            val a1 = atan2(cur.y - cc.y, cur.x - cc.x)
+                                                            st.floating = fl.transformed(Affine.around(cc, 1f, a1 - a0, 0f, 0f))
+                                                        }
+                                                    }
+                                                }
                                             }
                                             lastScreen = ch.position
                                         }
@@ -483,14 +582,14 @@ fun AnimationEditor(meta: ProjectMeta, initial: Project, store: ProjectStore, on
                                 } while (event.changes.any { it.pressed })
 
                                 if (drawing && stab != null) {
-                                    for (p in stab.finish(lastRaw)) pushPoint(p)
+                                    for (p in stab.finish(lastRawS)) pushPoint(st.view.screenToProject(p))
                                     st.commitStroke()
                                 } else if (drawing && lassoDraw) {
-                                    st.finishLasso()
+                                    val poly = st.activePoints.toList()
+                                    st.activePoints.clear()
+                                    if (poly.size >= 3 && (st.lassoShape == LassoShape.FREE || moved)) requestLift(poly)
                                 } else if (tool == Tool.BUCKET && !multi && !moved && !rejected && !navOnly) {
-                                    requestFill(st.view.screenToProject(downPos.toPoint()))
-                                } else if (tool == Tool.LASSO && sel != null && !navOnly) {
-                                    st.commitSelection()
+                                    requestFill(startProj)
                                 } else {
                                     st.activePoints.clear()
                                 }
@@ -501,16 +600,36 @@ fun AnimationEditor(meta: ProjectMeta, initial: Project, store: ProjectStore, on
                     ToolCell(
                         width = 30.dp, height = 30.dp, modifier = Modifier.align(Alignment.TopEnd).padding(8.dp),
                         onClick = { st.view = ViewTransform.fitSheet(sw, sh, canvasSize.width.toFloat(), canvasSize.height.toFloat(), 12f) },
-                    ) { Icon(Icons.Default.FitScreen, "Ajustar à folha", tint = it, modifier = androidx.compose.ui.Modifier.then(Modifier)) }
-                    if (st.selection != null) {
-                        Row(
+                    ) { Icon(Icons.Default.FitScreen, "Ajustar à folha", tint = it) }
+                    if (st.tool == Tool.LASSO) {
+                        Column(
                             Modifier.align(Alignment.TopCenter).padding(top = 8.dp).studioCard(12.dp).padding(3.dp),
-                            horizontalArrangement = Arrangement.spacedBy(3.dp),
+                            verticalArrangement = Arrangement.spacedBy(3.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally,
                         ) {
-                            OverlayChip("Mover", selected = st.selMode == SelMode.MOVE) { st.selMode = SelMode.MOVE }
-                            OverlayChip("Transformar", selected = st.selMode == SelMode.TRANSFORM) { st.selMode = SelMode.TRANSFORM }
-                            OverlayChip("Apagar", danger = true) { st.deleteSelection() }
-                            OverlayChip("OK") { st.clearSelection() }
+                            Row(horizontalArrangement = Arrangement.spacedBy(3.dp)) {
+                                OverlayChip("Livre", selected = st.lassoShape == LassoShape.FREE) { st.lassoShape = LassoShape.FREE }
+                                OverlayChip("Retângulo", selected = st.lassoShape == LassoShape.RECT) { st.lassoShape = LassoShape.RECT }
+                                OverlayChip("Elipse", selected = st.lassoShape == LassoShape.ELLIPSE) { st.lassoShape = LassoShape.ELLIPSE }
+                                if (st.clipImage != null) {
+                                    OverlayChip("Colar") {
+                                        st.pasteClip(st.view.screenToProject(Point(canvasSize.width / 2f, canvasSize.height / 2f)))
+                                    }
+                                }
+                            }
+                            if (st.floating != null) {
+                                Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(3.dp)) {
+                                    OverlayChip("Virar H") { st.flipFloatingH() }
+                                    OverlayChip("Virar V") { st.flipFloatingV() }
+                                    OverlayChip("Rodar 45°") { st.rotateFloating(45f) }
+                                    OverlayChip("Copiar") { st.copyFloating() }
+                                    OverlayChip("Cortar") { st.cutFloating() }
+                                    OverlayChip("Duplicar") { st.duplicateFloating() }
+                                    OverlayChip("Repor") { st.resetFloating() }
+                                    OverlayChip("Apagar", danger = true) { st.discardFloating() }
+                                    OverlayChip("OK", selected = true) { st.commitFloating() }
+                                }
+                            }
                         }
                     }
                     Row(
@@ -522,6 +641,7 @@ fun AnimationEditor(meta: ProjectMeta, initial: Project, store: ProjectStore, on
                         Text("FRAME", style = StudioType.Caption.copy(fontSize = 9.sp))
                         Text("${st.project.currentFrame + 1} / ${st.project.frameCount}", style = StudioType.Number.copy(fontSize = 12.sp))
                         if (st.busyFill) Text("A PREENCHER…", style = StudioType.Caption.copy(fontSize = 9.sp, color = StudioColors.Accent))
+                        if (st.busyLift) Text("A SELECIONAR…", style = StudioType.Caption.copy(fontSize = 9.sp, color = StudioColors.Accent))
                     }
                 }
                 if (st.toolsRight) toolPanel()
