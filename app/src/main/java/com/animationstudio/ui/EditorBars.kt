@@ -38,12 +38,18 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInRoot
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
@@ -123,6 +129,9 @@ internal fun TopBar(
     onMoveLayer: (Long, Int) -> Unit,
     onFrameOptions: (Int) -> Unit,
     onGripEnd: (Float, Float) -> Unit,
+    onSwatchDrag: (Offset) -> Unit,
+    onSwatchDrop: (Offset) -> Unit,
+    onSwatchCancel: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val all = st.project.layers.asReversed()
@@ -132,6 +141,10 @@ internal fun TopBar(
     val rowH = cellH + 3.dp
     val rowPx = with(LocalDensity.current) { rowH.toPx() }
     val curMove by rememberUpdatedState(onMoveLayer)
+    val curSwDrag by rememberUpdatedState(onSwatchDrag)
+    val curSwDrop by rememberUpdatedState(onSwatchDrop)
+    val curSwCancel by rememberUpdatedState(onSwatchCancel)
+    var swatchRoot by remember { mutableStateOf(Offset.Zero) }
     val hScroll = rememberScrollState()
     val vScroll = rememberScrollState()
     Row(
@@ -218,10 +231,25 @@ internal fun TopBar(
         Column(verticalArrangement = Arrangement.spacedBy(3.dp), horizontalAlignment = Alignment.End) {
             Row(horizontalArrangement = Arrangement.spacedBy(3.dp), verticalAlignment = Alignment.CenterVertically) {
                 ToolCell(width = 30.dp, height = 30.dp, onClick = onCamera) { Icon(Icons.Default.Videocam, "Câmara", tint = it, modifier = Modifier.size(17.dp)) }
+                // Amostra da cor: toque abre o seletor; arrastar para a folha pinta a região onde se solta.
                 CheckerBox(
                     Color(st.colorArgb),
                     Modifier.size(width = 38.dp, height = 30.dp).clip(RoundedCornerShape(9.dp))
-                        .border(2.dp, StudioColors.Ink, RoundedCornerShape(9.dp)).clickable { onColor(ColorMethod.DISC) }
+                        .border(2.dp, StudioColors.Ink, RoundedCornerShape(9.dp))
+                        .onGloballyPositioned { swatchRoot = it.positionInRoot() }
+                        .pointerInput(Unit) {
+                            var cur = Offset.Zero
+                            detectDragGestures(
+                                onDragStart = { o -> cur = swatchRoot + o; curSwDrag(cur) },
+                                onDragEnd = { curSwDrop(cur) },
+                                onDragCancel = { curSwCancel() },
+                            ) { change, d ->
+                                change.consume()
+                                cur += d
+                                curSwDrag(cur)
+                            }
+                        }
+                        .clickable { onColor(ColorMethod.DISC) }
                 )
                 ToolCell(width = 28.dp, height = 30.dp, onClick = { onColor(ColorMethod.PALETTE) }) { PaletteGlyph(it, Modifier.size(16.dp)) }
                 ToolCell(width = 28.dp, height = 30.dp, onClick = { onColor(ColorMethod.RGB) }) { RgbGlyph(it, Modifier.size(16.dp)) }
