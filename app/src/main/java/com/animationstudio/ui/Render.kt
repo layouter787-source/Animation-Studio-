@@ -148,6 +148,98 @@ private fun addStamp(path: Path, shape: StampShape, st: Stamp) {
             path.quadraticTo(wx(hgt * 0.55f, base * 0.4f + bend), wy(hgt * 0.55f, base * 0.4f + bend), wx(0f, base), wy(0f, base))
             path.close()
         }
+        StampShape.HAIR -> {
+            val len = st.size
+            val w = max(0.5f, st.size * 0.025f)
+            val bend = len * 0.18f
+            path.moveTo(wx(0f, -w), wy(0f, -w))
+            path.quadraticTo(wx(len * 0.5f, -w * 0.5f + bend), wy(len * 0.5f, -w * 0.5f + bend), wx(len, bend * 1.5f), wy(len, bend * 1.5f))
+            path.quadraticTo(wx(len * 0.5f, w * 0.5f + bend), wy(len * 0.5f, w * 0.5f + bend), wx(0f, w), wy(0f, w))
+            path.close()
+        }
+        StampShape.NEEDLE -> {
+            val len = st.size
+            val w = max(0.5f, st.size * 0.04f)
+            path.moveTo(wx(0f, -w), wy(0f, -w))
+            path.lineTo(wx(len, 0f), wy(len, 0f))
+            path.lineTo(wx(0f, w), wy(0f, w))
+            path.close()
+        }
+        StampShape.PETAL -> {
+            val len = st.size
+            val wid = st.size * 0.45f
+            path.moveTo(wx(0f, 0f), wy(0f, 0f))
+            path.cubicTo(wx(len * 0.3f, -wid), wy(len * 0.3f, -wid), wx(len * 0.9f, -wid), wy(len * 0.9f, -wid), wx(len, 0f), wy(len, 0f))
+            path.cubicTo(wx(len * 0.9f, wid), wy(len * 0.9f, wid), wx(len * 0.3f, wid), wy(len * 0.3f, wid), wx(0f, 0f), wy(0f, 0f))
+            path.close()
+        }
+        StampShape.FLAKE -> {
+            val w = max(0.4f, r * 0.1f)
+            for (i in 0 until 6) {
+                val ang = i * (PI.toFloat() / 3f)
+                val ax = cos(ang) * r
+                val ay = sin(ang) * r
+                val qx = -sin(ang) * w
+                val qy = cos(ang) * w
+                path.moveTo(wx(qx, qy), wy(qx, qy))
+                path.lineTo(wx(ax, ay), wy(ax, ay))
+                path.lineTo(wx(-qx, -qy), wy(-qx, -qy))
+                path.close()
+            }
+        }
+        StampShape.STREAK, StampShape.RAIN -> {
+            val len = st.size
+            val w = max(0.5f, st.size * 0.02f)
+            path.moveTo(wx(-len / 2f, -w), wy(-len / 2f, -w))
+            path.lineTo(wx(len / 2f, -w * 0.3f), wy(len / 2f, -w * 0.3f))
+            path.lineTo(wx(len / 2f, w * 0.3f), wy(len / 2f, w * 0.3f))
+            path.lineTo(wx(-len / 2f, w), wy(-len / 2f, w))
+            path.close()
+        }
+        StampShape.DASH -> {
+            val len = st.size
+            val w = max(0.8f, st.size * 0.15f)
+            path.moveTo(wx(-len / 2f, -w), wy(-len / 2f, -w))
+            path.lineTo(wx(len / 2f, -w), wy(len / 2f, -w))
+            path.lineTo(wx(len / 2f, w), wy(len / 2f, w))
+            path.lineTo(wx(-len / 2f, w), wy(-len / 2f, w))
+            path.close()
+        }
+        StampShape.BOLT -> {
+            val len = st.size
+            val w = max(0.7f, st.size * 0.035f)
+            val xs = floatArrayOf(0f, 0.2f, 0.4f, 0.6f, 0.8f, 1f)
+            val ys = floatArrayOf(0f, -0.16f, 0.12f, -0.18f, 0.1f, 0f)
+            for (i in xs.indices) {
+                val lx = xs[i] * len
+                val ly = ys[i] * len - w
+                if (i == 0) path.moveTo(wx(lx, ly), wy(lx, ly)) else path.lineTo(wx(lx, ly), wy(lx, ly))
+            }
+            for (i in xs.indices.reversed()) {
+                val lx = xs[i] * len
+                val ly = ys[i] * len + w
+                path.lineTo(wx(lx, ly), wy(lx, ly))
+            }
+            path.close()
+        }
+        StampShape.TWIG -> {
+            val len = st.size
+            val w = max(0.6f, st.size * 0.035f)
+            fun spike(bx: Float, by: Float, tx: Float, ty: Float, ww: Float) {
+                val dx = tx - bx
+                val dy = ty - by
+                val l = max(0.001f, hypot(dx, dy))
+                val nx = -dy / l * ww
+                val ny = dx / l * ww
+                path.moveTo(wx(bx + nx, by + ny), wy(bx + nx, by + ny))
+                path.lineTo(wx(tx, ty), wy(tx, ty))
+                path.lineTo(wx(bx - nx, by - ny), wy(bx - nx, by - ny))
+                path.close()
+            }
+            spike(0f, 0f, len, 0f, w)
+            spike(len * 0.35f, 0f, len * 0.7f, -len * 0.32f, w * 0.8f)
+            spike(len * 0.55f, 0f, len * 0.88f, len * 0.3f, w * 0.8f)
+        }
         StampShape.NONE -> {}
     }
 }

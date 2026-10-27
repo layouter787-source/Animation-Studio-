@@ -1,6 +1,7 @@
 package com.animationstudio.domain
 
 import kotlin.math.PI
+import kotlin.math.atan2
 import kotlin.math.hypot
 import kotlin.math.max
 import kotlin.math.min
@@ -18,8 +19,10 @@ object StampGeometry {
         val rnd = java.util.Random(seed.toLong())
         val r = width / 2f
         val spacingDist = max(0.5f, width * preset.spacing)
+        val twoPi = 2f * PI.toFloat()
 
         fun emit(x: Float, y: Float, tx: Float, ty: Float) {
+            val ang = atan2(ty, tx)
             for (k in 0 until preset.density) {
                 if (out.size >= MAX_STAMPS) return
                 val lat = (rnd.nextFloat() * 2f - 1f) * preset.scatter * r
@@ -30,9 +33,18 @@ object StampGeometry {
                 when (preset.stamp) {
                     StampShape.GRAIN -> out.add(Stamp(px, py, max(0.5f, width * 0.09f * jit), 0f, 0.35f + 0.65f * rnd.nextFloat()))
                     StampShape.DOT -> out.add(Stamp(px, py, max(0.5f, width * 0.28f * jit), 0f, 1f))
-                    StampShape.LEAF -> out.add(Stamp(px, py, max(1f, width * 0.55f * jit), rnd.nextFloat() * 2f * PI.toFloat(), 1f))
+                    StampShape.LEAF -> out.add(Stamp(px, py, max(1f, width * 0.55f * jit), rnd.nextFloat() * twoPi, 1f))
                     StampShape.GRASS -> out.add(Stamp(px, py, max(1f, width * (0.55f + 0.45f * rnd.nextFloat()) * jit), -PI.toFloat() / 2f + (rnd.nextFloat() - 0.5f) * 0.9f, 1f))
                     StampShape.STAR -> out.add(Stamp(px, py, max(1f, width * 0.45f * jit), rnd.nextFloat() * PI.toFloat(), 0.6f + 0.4f * rnd.nextFloat()))
+                    StampShape.HAIR -> out.add(Stamp(px, py, max(1f, width * (0.9f + 0.5f * rnd.nextFloat()) * jit), ang + (rnd.nextFloat() - 0.5f) * 0.35f, 1f))
+                    StampShape.NEEDLE -> out.add(Stamp(px, py, max(1f, width * 0.5f * jit), rnd.nextFloat() * twoPi, 1f))
+                    StampShape.PETAL -> out.add(Stamp(px, py, max(1f, width * 0.5f * jit), rnd.nextFloat() * twoPi, 1f))
+                    StampShape.FLAKE -> out.add(Stamp(px, py, max(1f, width * 0.4f * jit), rnd.nextFloat() * PI.toFloat(), 0.6f + 0.4f * rnd.nextFloat()))
+                    StampShape.STREAK -> out.add(Stamp(px, py, max(1f, width * (0.8f + 0.8f * rnd.nextFloat()) * jit), ang, 0.5f + 0.5f * rnd.nextFloat()))
+                    StampShape.RAIN -> out.add(Stamp(px, py, max(1f, width * (0.8f + 0.6f * rnd.nextFloat()) * jit), PI.toFloat() / 2f + 0.25f + (rnd.nextFloat() - 0.5f) * 0.1f, 0.5f + 0.5f * rnd.nextFloat()))
+                    StampShape.BOLT -> out.add(Stamp(px, py, max(1f, width * preset.spacing * 1.1f * jit), ang, 1f))
+                    StampShape.TWIG -> out.add(Stamp(px, py, max(1f, width * 0.8f * jit), ang + (rnd.nextFloat() - 0.5f) * 0.8f, 1f))
+                    StampShape.DASH -> out.add(Stamp(px, py, max(1f, width * 0.9f * jit), ang, 1f))
                     StampShape.NONE -> {}
                 }
             }
