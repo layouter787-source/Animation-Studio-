@@ -1,5 +1,8 @@
 package com.animationstudio.ui
 
+import android.content.Context
+import android.graphics.BitmapFactory
+import android.net.Uri
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -24,7 +27,9 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
@@ -35,6 +40,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -48,9 +54,11 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.geometry.isSpecified
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.CompositingStrategy
+import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.asAndroidBitmap
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.DrawTransform
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.clipRect
@@ -60,7 +68,9 @@ import androidx.compose.ui.input.pointer.PointerInputChange
 import androidx.compose.ui.input.pointer.PointerType
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.positionChanged
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.layout.positionInRoot
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.IntOffset
@@ -153,6 +163,20 @@ private fun fillWithRetry(project: Project, sw: Int, sh: Int, p: Point, color: I
     return best
 }
 
+/** Carrega uma imagem de referência (reduzida a no máximo ~2048 px para poupar memória). */
+private suspend fun loadReference(context: Context, uri: Uri): ImageBitmap? = withContext(Dispatchers.IO) {
+    try {
+        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        context.contentResolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, bounds) }
+        var sample = 1
+        while (bounds.outWidth / sample > 2048 || bounds.outHeight / sample > 2048) sample *= 2
+        val opts = BitmapFactory.Options().apply { inSampleSize = sample }
+        context.contentResolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, opts) }?.asImageBitmap()
+    } catch (e: Exception) {
+        null
+    }
+}
+
 private suspend fun persist(store: ProjectStore, meta: ProjectMeta, fps: Int, project: Project): Boolean =
     withContext(Dispatchers.IO) {
         try {
@@ -207,7 +231,15 @@ fun AnimationEditor(meta: ProjectMeta, initial: Project, store: ProjectStore, on
     var expanded by remember { mutableStateOf(false) }
     var topBarHeightPx by remember { mutableIntStateOf(0) }
     var canvasSize by remember { mutableStateOf(IntSize.Zero) }
+    var canvasRoot by remember { mutableStateOf(Offset.Zero) }
+    var rootSize by remember { mutableStateOf(IntSize.Zero) }
     var dialog by remember { mutableStateOf<EditorDialog?>(null) }
+    var dragPos by remember { mutableStateOf<Offset?>(null) }
+    var refImage by remember { mutableStateOf<ImageBitmap?>(null) }
+    var refVisible by remember { mutableStateOf(true) }
+    var refOffset by remember { mutableStateOf(Offset(40f, 120f)) }
+    var refWidth by remember { mutableFloatStateOf(520f) }
+    var refOpacity by remember { mutableFloatStateOf(0.85f) }
     val scope = rememberCoroutineScope()
     val sw = sheetW.toFloat()
     val sh = sheetH.toFloat()
@@ -297,6 +329,12 @@ fun AnimationEditor(meta: ProjectMeta, initial: Project, store: ProjectStore, on
             toast(if (ok) "Sequência exportada" else "Falha ao exportar a sequência")
         }
     }
+    val refLauncher = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
+        if (uri != null) scope.launch {
+            val img = loadReference(context, uri)
+            if (img == null) toast("Não foi possível abrir a imagem") else { refImage = img; refVisible = true }
+        }
+    }
 
     BackHandler { close() }
 
@@ -346,6 +384,16 @@ fun AnimationEditor(meta: ProjectMeta, initial: Project, store: ProjectStore, on
             onMoveLayer = { id, delta -> st.edit { p -> p.moveLayer(id, delta) } },
             onFrameOptions = { dialog = EditorDialog.FrameActions(it) },
             onGripEnd = onTimelineGrip,
+            onSwatchDrag = { dragPos = it },
+            onSwatchDrop = { p ->
+                dragPos = null
+                // Largar a cor sobre a folha pinta a região em que se largou (como no Procreate Dreams).
+                val local = Offset(p.x - canvasRoot.x, p.y - canvasRoot.y)
+                if (local.x in 0f..canvasSize.width.toFloat() && local.y in 0f..canvasSize.height.toFloat()) {
+                    requestFill(st.view.screenToProject(Point(local.x, local.y)))
+                }
+            },
+            onSwatchCancel = { dragPos = null },
             modifier = Modifier.onSizeChanged { topBarHeightPx = it.height },
         )
     }
@@ -375,7 +423,7 @@ fun AnimationEditor(meta: ProjectMeta, initial: Project, store: ProjectStore, on
         )
     }
 
-    Box(Modifier.fillMaxSize().background(StudioColors.Navy)) {
+    Box(Modifier.fillMaxSize().background(StudioColors.Navy).onSizeChanged { rootSize = it }) {
         Column(Modifier.fillMaxSize()) {
             if (!st.timelineBottom) timelineBar()
             Row(Modifier.weight(1f).fillMaxWidth()) {
@@ -388,6 +436,7 @@ fun AnimationEditor(meta: ProjectMeta, initial: Project, store: ProjectStore, on
                         )
                         .clip(RoundedCornerShape(14.dp)).background(StudioColors.Workspace)
                         .onSizeChanged { canvasSize = it }
+                        .onGloballyPositioned { canvasRoot = it.positionInRoot() }
                 ) {
                     // Folha branca sobre o espaço de trabalho escuro.
                     Canvas(Modifier.fillMaxSize()) {
@@ -601,6 +650,12 @@ fun AnimationEditor(meta: ProjectMeta, initial: Project, store: ProjectStore, on
                         width = 30.dp, height = 30.dp, modifier = Modifier.align(Alignment.TopEnd).padding(8.dp),
                         onClick = { st.view = ViewTransform.fitSheet(sw, sh, canvasSize.width.toFloat(), canvasSize.height.toFloat(), 12f) },
                     ) { Icon(Icons.Default.FitScreen, "Ajustar à folha", tint = it) }
+                    ToolCell(
+                        width = 30.dp, height = 30.dp, selected = refImage != null && refVisible,
+                        modifier = Modifier.align(Alignment.TopEnd).padding(top = 44.dp, end = 8.dp),
+                        onLongClick = { refLauncher.launch("image/*") },
+                        onClick = { if (refImage == null) refLauncher.launch("image/*") else refVisible = !refVisible },
+                    ) { Text("Ref", style = StudioType.Label.copy(fontSize = 10.sp, color = it)) }
                     if (st.tool == Tool.LASSO) {
                         Column(
                             Modifier.align(Alignment.TopCenter).padding(top = 8.dp).studioCard(12.dp).padding(3.dp),
@@ -640,6 +695,8 @@ fun AnimationEditor(meta: ProjectMeta, initial: Project, store: ProjectStore, on
                     ) {
                         Text("FRAME", style = StudioType.Caption.copy(fontSize = 9.sp))
                         Text("${st.project.currentFrame + 1} / ${st.project.frameCount}", style = StudioType.Number.copy(fontSize = 12.sp))
+                        Text("ZOOM", style = StudioType.Caption.copy(fontSize = 9.sp))
+                        Text("${(st.view.scale * 100f).roundToInt()}%", style = StudioType.Number.copy(fontSize = 12.sp))
                         if (st.busyFill) Text("A PREENCHER…", style = StudioType.Caption.copy(fontSize = 9.sp, color = StudioColors.Accent))
                         if (st.busyLift) Text("A SELECIONAR…", style = StudioType.Caption.copy(fontSize = 9.sp, color = StudioColors.Accent))
                     }
@@ -657,6 +714,23 @@ fun AnimationEditor(meta: ProjectMeta, initial: Project, store: ProjectStore, on
             ExpandTab(
                 expanded = expanded, atBottom = false, onSet = { expanded = it },
                 modifier = Modifier.align(Alignment.TopCenter).offset { IntOffset(0, topBarHeightPx) },
+            )
+        }
+        val ref = refImage
+        if (ref != null && refVisible) {
+            ReferenceWindow(
+                image = ref, offset = refOffset, widthPx = refWidth, opacity = refOpacity, container = rootSize,
+                onMove = { d -> refOffset = Offset(refOffset.x + d.x, refOffset.y + d.y) },
+                onResize = { dx -> refWidth = (refWidth + dx).coerceIn(160f, rootSize.width * 0.8f) },
+                onCycleOpacity = { refOpacity = if (refOpacity < 0.7f) 0.8f else if (refOpacity < 0.9f) 1f else 0.55f },
+                onClose = { refVisible = false },
+            )
+        }
+        val dp0 = dragPos
+        if (dp0 != null) {
+            Box(
+                Modifier.offset { IntOffset(dp0.x.roundToInt() - 18.dp.roundToPx(), dp0.y.roundToInt() - 18.dp.roundToPx()) }
+                    .size(36.dp).clip(CircleShape).background(Color(st.colorArgb)).border(3.dp, Color.White, CircleShape)
             )
         }
     }
