@@ -33,7 +33,20 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.ContentCopy
+import androidx.compose.material.icons.filled.ContentCut
+import androidx.compose.material.icons.filled.ContentPaste
+import androidx.compose.material.icons.filled.ControlPointDuplicate
+import androidx.compose.material.icons.filled.CropSquare
+import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.FitScreen
+import androidx.compose.material.icons.filled.Flip
+import androidx.compose.material.icons.filled.Gesture
+import androidx.compose.material.icons.filled.Image
+import androidx.compose.material.icons.filled.RadioButtonUnchecked
+import androidx.compose.material.icons.filled.RestartAlt
+import androidx.compose.material.icons.filled.RotateRight
 import androidx.compose.material3.Icon
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
@@ -49,6 +62,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.geometry.isSpecified
@@ -64,6 +78,7 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.clipRect
 import androidx.compose.ui.graphics.drawscope.withTransform
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.PointerInputChange
 import androidx.compose.ui.input.pointer.PointerType
 import androidx.compose.ui.input.pointer.pointerInput
@@ -191,24 +206,29 @@ private suspend fun persist(store: ProjectStore, meta: ProjectMeta, fps: Int, pr
         }
     }
 
+/** Botão só com ícone, sobre a folha (laço): sem texto. */
 @Composable
-private fun OverlayChip(
-    text: String,
+private fun OverlayIconChip(
+    icon: ImageVector,
+    description: String,
     modifier: Modifier = Modifier,
     selected: Boolean = false,
     danger: Boolean = false,
+    iconRotation: Float = 0f,
     onClick: () -> Unit,
 ) {
-    val shape = RoundedCornerShape(9.dp)
+    val shape = RoundedCornerShape(10.dp)
     Box(
-        modifier.clip(shape)
-            .background(if (selected) StudioColors.Accent else StudioColors.Surface.copy(alpha = 0.94f))
+        modifier.size(36.dp).clip(shape)
+            .background(if (selected) StudioColors.Accent else StudioColors.Surface.copy(alpha = 0.8f))
             .border(1.dp, if (selected) StudioColors.Accent else StudioColors.Outline, shape)
-            .combinedClickable(onClick = onClick)
-            .padding(horizontal = 10.dp, vertical = 6.dp),
+            .combinedClickable(onClick = onClick),
         contentAlignment = Alignment.Center,
     ) {
-        Text(text, style = StudioType.Label.copy(fontSize = 11.sp, color = if (danger) StudioColors.Danger else Color.White))
+        Icon(
+            icon, description, tint = if (danger) StudioColors.Danger else Color.White,
+            modifier = Modifier.size(20.dp).rotate(iconRotation),
+        )
     }
 }
 
@@ -223,6 +243,7 @@ fun AnimationEditor(meta: ProjectMeta, initial: Project, store: ProjectStore, on
             it.timelineBottom = prefs.timelineBottom
             it.toolsRight = prefs.toolsRight
             it.stabilizer = prefs.stabilizer
+            it.smoothing = prefs.smoothing
         }
     }
     var fps by remember { mutableIntStateOf(meta.fps) }
@@ -584,7 +605,7 @@ fun AnimationEditor(meta: ProjectMeta, initial: Project, store: ProjectStore, on
                                     } else if (pressedCount == 1) {
                                         val ch = changes.firstOrNull { it.id == down.id }
                                         if (ch != null && ch.pressed) {
-                                            if ((ch.position - downPos).getDistance() > 12f) moved = true
+                                            if ((ch.position - downPos).getDistance() > 24f) moved = true
                                             if (drawing && !multi) {
                                                 if (stab != null) {
                                                     // Estabiliza em pixels de ecrã e só depois converte para a folha.
@@ -655,7 +676,7 @@ fun AnimationEditor(meta: ProjectMeta, initial: Project, store: ProjectStore, on
                         modifier = Modifier.align(Alignment.TopEnd).padding(top = 44.dp, end = 8.dp),
                         onLongClick = { refLauncher.launch("image/*") },
                         onClick = { if (refImage == null) refLauncher.launch("image/*") else refVisible = !refVisible },
-                    ) { Text("Ref", style = StudioType.Label.copy(fontSize = 10.sp, color = it)) }
+                    ) { Icon(Icons.Default.Image, "Referência", tint = it, modifier = Modifier.size(18.dp)) }
                     if (st.tool == Tool.LASSO) {
                         Column(
                             Modifier.align(Alignment.TopCenter).padding(top = 8.dp).studioCard(12.dp).padding(3.dp),
@@ -663,40 +684,36 @@ fun AnimationEditor(meta: ProjectMeta, initial: Project, store: ProjectStore, on
                             horizontalAlignment = Alignment.CenterHorizontally,
                         ) {
                             Row(horizontalArrangement = Arrangement.spacedBy(3.dp)) {
-                                OverlayChip("Livre", selected = st.lassoShape == LassoShape.FREE) { st.lassoShape = LassoShape.FREE }
-                                OverlayChip("Retângulo", selected = st.lassoShape == LassoShape.RECT) { st.lassoShape = LassoShape.RECT }
-                                OverlayChip("Elipse", selected = st.lassoShape == LassoShape.ELLIPSE) { st.lassoShape = LassoShape.ELLIPSE }
+                                OverlayIconChip(Icons.Default.Gesture, "Livre", selected = st.lassoShape == LassoShape.FREE) { st.lassoShape = LassoShape.FREE }
+                                OverlayIconChip(Icons.Default.CropSquare, "Retângulo", selected = st.lassoShape == LassoShape.RECT) { st.lassoShape = LassoShape.RECT }
+                                OverlayIconChip(Icons.Default.RadioButtonUnchecked, "Elipse", selected = st.lassoShape == LassoShape.ELLIPSE) { st.lassoShape = LassoShape.ELLIPSE }
                                 if (st.clipImage != null) {
-                                    OverlayChip("Colar") {
+                                    OverlayIconChip(Icons.Default.ContentPaste, "Colar") {
                                         st.pasteClip(st.view.screenToProject(Point(canvasSize.width / 2f, canvasSize.height / 2f)))
                                     }
                                 }
                             }
                             if (st.floating != null) {
                                 Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(3.dp)) {
-                                    OverlayChip("Virar H") { st.flipFloatingH() }
-                                    OverlayChip("Virar V") { st.flipFloatingV() }
-                                    OverlayChip("Rodar 45°") { st.rotateFloating(45f) }
-                                    OverlayChip("Copiar") { st.copyFloating() }
-                                    OverlayChip("Cortar") { st.cutFloating() }
-                                    OverlayChip("Duplicar") { st.duplicateFloating() }
-                                    OverlayChip("Repor") { st.resetFloating() }
-                                    OverlayChip("Apagar", danger = true) { st.discardFloating() }
-                                    OverlayChip("OK", selected = true) { st.commitFloating() }
+                                    OverlayIconChip(Icons.Default.Flip, "Virar na horizontal") { st.flipFloatingH() }
+                                    OverlayIconChip(Icons.Default.Flip, "Virar na vertical", iconRotation = 90f) { st.flipFloatingV() }
+                                    OverlayIconChip(Icons.Default.RotateRight, "Rodar 45°") { st.rotateFloating(45f) }
+                                    OverlayIconChip(Icons.Default.ContentCopy, "Copiar") { st.copyFloating() }
+                                    OverlayIconChip(Icons.Default.ContentCut, "Cortar") { st.cutFloating() }
+                                    OverlayIconChip(Icons.Default.ControlPointDuplicate, "Duplicar") { st.duplicateFloating() }
+                                    OverlayIconChip(Icons.Default.RestartAlt, "Repor") { st.resetFloating() }
+                                    OverlayIconChip(Icons.Default.Delete, "Apagar", danger = true) { st.discardFloating() }
+                                    OverlayIconChip(Icons.Default.Check, "Confirmar", selected = true) { st.commitFloating() }
                                 }
                             }
                         }
                     }
+                    // Estado solto, sem cartão: só o zoom e os avisos de trabalho em curso.
                     Row(
-                        Modifier.align(Alignment.BottomCenter).padding(bottom = 6.dp)
-                            .clip(RoundedCornerShape(9.dp)).background(StudioColors.Surface.copy(alpha = 0.94f))
-                            .border(1.dp, StudioColors.Outline, RoundedCornerShape(9.dp)).padding(horizontal = 10.dp, vertical = 4.dp),
-                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        Modifier.align(Alignment.BottomCenter).padding(bottom = 8.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
                     ) {
-                        Text("FRAME", style = StudioType.Caption.copy(fontSize = 9.sp))
-                        Text("${st.project.currentFrame + 1} / ${st.project.frameCount}", style = StudioType.Number.copy(fontSize = 12.sp))
-                        Text("ZOOM", style = StudioType.Caption.copy(fontSize = 9.sp))
-                        Text("${(st.view.scale * 100f).roundToInt()}%", style = StudioType.Number.copy(fontSize = 12.sp))
+                        Text("${(st.view.scale * 100f).roundToInt()}%", style = StudioType.Number.copy(fontSize = 11.sp, color = Color.White.copy(alpha = 0.7f)))
                         if (st.busyFill) Text("A PREENCHER…", style = StudioType.Caption.copy(fontSize = 9.sp, color = StudioColors.Accent))
                         if (st.busyLift) Text("A SELECIONAR…", style = StudioType.Caption.copy(fontSize = 9.sp, color = StudioColors.Accent))
                     }
@@ -820,10 +837,11 @@ fun AnimationEditor(meta: ProjectMeta, initial: Project, store: ProjectStore, on
                 preset = BrushLibrary.byId(st.presetIdOf(d.tool)),
                 size = if (isBrush) st.brushSize else st.eraserSize,
                 opacity = if (isBrush) st.brushOpacity else st.eraserOpacity,
-                stabilizer = st.stabilizer, mode = st.drawMode,
+                stabilizer = st.stabilizer, smoothing = st.smoothing, mode = st.drawMode,
                 onSize = { if (isBrush) st.brushSize = it else st.eraserSize = it },
                 onOpacity = { if (isBrush) st.brushOpacity = it else st.eraserOpacity = it },
                 onStabilizer = { st.stabilizer = it; prefs.stabilizer = it },
+                onSmoothing = { st.smoothing = it; prefs.smoothing = it },
                 onMode = { st.drawMode = it },
                 onDismiss = { dialog = null },
             )
