@@ -2,9 +2,14 @@ package com.animationstudio.ui
 
 import android.content.Context
 
-/** Preferências do estúdio (SharedPreferences): caneta, rejeição de palma, posição das barras, estabilizador, suavização. */
+/** Preferências do estúdio (SharedPreferences): caneta, rejeição de palma, posição das barras, estabilizador, suavização, pontas e pixelização. */
 internal class Prefs(context: Context) {
     private val sp = context.getSharedPreferences("studio", Context.MODE_PRIVATE)
+
+    init {
+        StudioRender.taperEnds = sp.getBoolean("taperEnds", false)
+        StudioRender.pixelated = sp.getBoolean("pixelated", false)
+    }
 
     var penOnly: Boolean
         get() = sp.getBoolean("penOnly", false)
@@ -30,4 +35,14 @@ internal class Prefs(context: Context) {
     var smoothing: Float
         get() = sp.getFloat("smoothing", 0.4f)
         set(v) { sp.edit().putFloat("smoothing", v).apply() }
+
+    /** Pontas afinadas nos novos traços (por defeito desligado: traço uniforme). */
+    var taperEnds: Boolean
+        get() = sp.getBoolean("taperEnds", false)
+        set(v) { sp.edit().putBoolean("taperEnds", v).apply(); StudioRender.taperEnds = v }
+
+    /** Traço pixelado, sem anti-aliasing (por defeito desligado). */
+    var pixelated: Boolean
+        get() = sp.getBoolean("pixelated", false)
+        set(v) { sp.edit().putBoolean("pixelated", v).apply(); StudioRender.pixelated = v }
 }

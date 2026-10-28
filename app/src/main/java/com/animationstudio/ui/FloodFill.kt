@@ -16,7 +16,8 @@ import kotlin.math.sqrt
  * Balde de tinta rápido (tempo O(pixels), independente do tamanho da fresta):
  *  - referência = o que está visível no frame, em até ~2 milhões de células (memória baixa, sem estourar a RAM);
  *  - fecho de frestas por fecho morfológico (dilatar e erodir com somas de prefixos): as frestas fecham sem engrossar as linhas;
- *  - expansão: a região entra [growPx] por baixo das linhas, sem halo nos contornos.
+ *  - expansão: a região entra [growPx] por baixo das linhas, sem halo nos contornos;
+ *  - bolsas: cantos minúsculos entre linhas que se cruzam (triângulos brancos) juntam-se ao preenchimento.
  * Chamar fora da thread principal. Devolve null se o ponto está fora da folha ou numa linha.
  */
 internal fun computeFill(
@@ -94,6 +95,35 @@ internal fun computeFill(
         if (y > 0 && !visited[i - w] && !blocked[i - w]) { visited[i - w] = true; stack[sp++] = i - w }
         if (y < h - 1 && !visited[i + w] && !blocked[i + w]) { visited[i + w] = true; stack[sp++] = i + w }
     }
+
+    // Bolsas: células livres, coladas ao preenchimento, presas entre linhas e pequenas demais para serem uma área
+    // própria (os triângulos brancos nos cantos). Se a componente cresce além do limite, é outra região e fica de fora.
+    val maxPocket = max(120, w * h / 4000)
+    val near = dilate(visited, w, h, 4)
+    val seen = BooleanArray(w * h)
+    val pocket = IntArray(maxPocket + 1)
+    val pocketCells = ArrayList<Int>()
+    for (i0 in 0 until w * h) {
+        if (!near[i0] || visited[i0] || barrier[i0] || seen[i0]) continue
+        var count = 0
+        var overflow = false
+        sp = 0
+        stack[sp++] = i0
+        seen[i0] = true
+        while (sp > 0) {
+            val i = stack[--sp]
+            if (count < maxPocket) pocket[count] = i else overflow = true
+            count++
+            val x = i % w
+            val y = i / w
+            if (x > 0 && !seen[i - 1] && !visited[i - 1] && !barrier[i - 1]) { seen[i - 1] = true; stack[sp++] = i - 1 }
+            if (x < w - 1 && !seen[i + 1] && !visited[i + 1] && !barrier[i + 1]) { seen[i + 1] = true; stack[sp++] = i + 1 }
+            if (y > 0 && !seen[i - w] && !visited[i - w] && !barrier[i - w]) { seen[i - w] = true; stack[sp++] = i - w }
+            if (y < h - 1 && !seen[i + w] && !visited[i + w] && !barrier[i + w]) { seen[i + w] = true; stack[sp++] = i + w }
+        }
+        if (!overflow) for (k in 0 until count) pocketCells.add(pocket[k])
+    }
+    for (c in pocketCells) visited[c] = true
 
     // Entra por baixo das linhas (expansão) sem passar para lá delas.
     val region: BooleanArray = if (growCells > 0) {
