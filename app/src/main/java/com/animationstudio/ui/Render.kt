@@ -48,13 +48,13 @@ import kotlin.math.PI
 import kotlin.math.cos
 import kotlin.math.hypot
 import kotlin.math.max
-import kotlin.math.min
 import kotlin.math.roundToInt
 import kotlin.math.sin
 
 // ---------------------------------------------------------------------------------------------
 // Traços. Motores: contínuo (espessura uniforme, pontas redondas), toques suaves (aerógrafo/aguarela),
 // linhas paralelas (cerdas), carimbos (plantas, luz) e grão de papel aplicado por cima (lápis, carvão).
+// A borracha NUNCA pinta de branco: usa composição DstOut (remove a opacidade do que existe na camada).
 // ---------------------------------------------------------------------------------------------
 
 private class InkPass(val width: Float, val alpha: Float, val body: Path?, val polys: List<Path>, val tips: List<Pair<Offset, Float>>)
@@ -73,6 +73,9 @@ private class InkRender(
 
 private val dabCache = ConcurrentHashMap<Int, ImageBitmap>()
 private val grainCache = ConcurrentHashMap<Int, ImageBitmap>()
+
+/** A borracha é um pouco maior que o traço: come o fio de anti-aliasing que ficava como "marca" da área apagada. */
+private const val ERASER_BLEED = 1f
 
 private fun polyPath(poly: List<Point>): Path {
     val p = Path()
@@ -281,14 +284,16 @@ private fun buildInk(s: BrushStroke): InkRender {
         val lines = pl.lines.map { pts -> LineRender(polyline(pts), pl.lineWidth, 1f - preset.lineJitter * rnd.nextFloat()) }
         return InkRender(emptyList(), null, null, 0f, 0f, lines, grain)
     }
+    // A borracha de traço contínuo é ligeiramente mais larga (sangra ERASER_BLEED) para não deixar fio de cor.
+    val w = if (s.erase) s.width + ERASER_BLEED else s.width
     val h = s.hardness.coerceIn(0f, 1f)
-    if (h > 0.95f) return InkRender(listOf(buildPass(s, s.width, 1f)), null, null, 0f, 0f, null, grain)
+    if (h > 0.95f) return InkRender(listOf(buildPass(s, w, 1f)), null, null, 0f, 0f, null, grain)
     // Traços antigos com borda suave: passagens empilhadas.
-    val core = s.width * (0.4f + 0.6f * h)
-    val span = s.width - core
+    val core = w * (0.4f + 0.6f * h)
+    val span = w - core
     return InkRender(
         listOf(
-            buildPass(s, s.width, 0.14f),
+            buildPass(s, w, 0.14f),
             buildPass(s, core + span * 0.66f, 0.2f),
             buildPass(s, core + span * 0.33f, 0.3f),
             buildPass(s, core, 1f),
@@ -459,9 +464,9 @@ private fun DrawScope.drawGrain(strength: Float, r: Rect) {
 }
 
 /**
- * Desenha um traço. A opacidade vem do alfa da cor; a borracha usa DstOut. Com opacidade < 100%, modo
- * "dentro"/"por trás", toques suaves ou grão, as peças são desenhadas numa camada que depois recebe o alfa, o
- * modo e o grão, para não escurecer onde as peças se sobrepõem.
+ * Desenha um traço. A opacidade vem do alfa da cor; a borracha usa DstOut (apaga a opacidade, não pinta de branco).
+ * Com opacidade < 100%, modo "dentro"/"por trás", toques suaves ou grão, as peças são desenhadas numa camada que
+ * depois recebe o alfa, o modo e o grão, para não escurecer onde as peças se sobrepõem.
  */
 internal fun DrawScope.drawInk(s: BrushStroke, tint: Color?, useCache: Boolean) {
     if (s.points.isEmpty()) return
@@ -478,7 +483,9 @@ internal fun DrawScope.drawInk(s: BrushStroke, tint: Color?, useCache: Boolean) 
     }
     val needLayer = alpha < 0.999f || (!s.erase && s.mode != 0) || render.dabs != null || render.grain > 0f
     if (!needLayer) {
-        drawRender(render, rgb, if (s.erase) BlendMode.DstOut else BlendMode.SrcOver)
+        // Borracha total: duas passagens DstOut tiram o fio de anti-aliasing que sobrava nas bordas ((1-c)² em vez de (1-c)).
+        val passes = if (s.erase) 2 else 1
+        repeat(passes) { drawRender(render, rgb, if (s.erase) BlendMode.DstOut else BlendMode.SrcOver) }
         return
     }
     val b = s.bounds() ?: return
