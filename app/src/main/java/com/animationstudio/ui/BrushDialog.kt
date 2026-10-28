@@ -26,6 +26,8 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
+import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -39,6 +41,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.CompositingStrategy
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
@@ -67,6 +70,17 @@ private fun StudioSlider(value: Float, onChange: (Float) -> Unit) {
         value = value, onValueChange = onChange,
         colors = SliderDefaults.colors(thumbColor = StudioColors.Accent, activeTrackColor = StudioColors.Accent, inactiveTrackColor = StudioColors.Surface3),
     )
+}
+
+@Composable
+private fun ToggleRow(label: String, checked: Boolean, onChange: (Boolean) -> Unit) {
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
+        Text(label, style = StudioType.Caption, modifier = Modifier.weight(1f))
+        Switch(
+            checked = checked, onCheckedChange = onChange,
+            colors = SwitchDefaults.colors(checkedTrackColor = StudioColors.Accent),
+        )
+    }
 }
 
 /**
@@ -178,7 +192,10 @@ internal fun BrushLibraryDialog(
     }
 }
 
-/** Definições do pincel em uso (duplo toque): tamanho 1–2000 px, opacidade, suavização, estabilizador e modo de desenho. */
+/**
+ * Definições do pincel em uso (duplo toque): tamanho 1–2000 px, opacidade, suavização, estabilizador, modo de
+ * desenho, pontas afinadas (opcional) e pixelização (opcional).
+ */
 @Composable
 internal fun BrushSettingsDialog(
     kind: BrushKind,
@@ -196,6 +213,9 @@ internal fun BrushSettingsDialog(
     onDismiss: () -> Unit,
 ) {
     val shape = RoundedCornerShape(16.dp)
+    val prefs = Prefs(LocalContext.current)
+    var taper by remember { mutableStateOf(StudioRender.taperEnds) }
+    var pixelated by remember { mutableStateOf(StudioRender.pixelated) }
     Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
         Surface(
             color = StudioColors.Surface.copy(alpha = PopupAlpha), shape = shape,
@@ -222,6 +242,8 @@ internal fun BrushSettingsDialog(
                             }
                         }
                     }
+                    ToggleRow("PONTAS AFINADAS", taper) { taper = it; prefs.taperEnds = it }
+                    ToggleRow("PIXELADO (SEM ANTI-ALIASING)", pixelated) { pixelated = it; prefs.pixelated = it }
                 }
                 Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(0.dp)) {
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
