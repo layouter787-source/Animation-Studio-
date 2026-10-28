@@ -21,6 +21,7 @@ import com.animationstudio.domain.LayerKind
 import com.animationstudio.domain.PlayMode
 import com.animationstudio.domain.Point
 import com.animationstudio.domain.Project
+import com.animationstudio.domain.QuadTransform
 import com.animationstudio.domain.StrokeSmoothing
 import com.animationstudio.domain.ViewTransform
 
@@ -76,6 +77,10 @@ internal class EditorState(initial: Project) {
     // ---- laço: seleção flutuante em pixels ----
     var lassoShape by mutableStateOf(LassoShape.FREE)
     var floating by mutableStateOf<ImageData?>(null)
+    /** Transformação em perspetiva: 4 cantos (TL, TR, BR, BL) da seleção; null = transformação normal. */
+    var quad by mutableStateOf<List<Point>?>(null)
+    /** Pivô da rotação na perspetiva; null = interseção das diagonais. */
+    var pivot by mutableStateOf<Point?>(null)
     private var floatOrigin: ImageData? = null
     private var floatLayerId = -1L
     var clipImage by mutableStateOf<ImageData?>(null)
@@ -145,53 +150,102 @@ internal class EditorState(initial: Project) {
         floating = img
         floatOrigin = img
         floatLayerId = layerId
+        quad = null
+        pivot = null
+    }
+
+    /** A imagem flutuante tal como está (com a perspetiva aplicada, se estiver ativa). */
+    private fun bakedFloating(): ImageData? {
+        val f = floating ?: return null
+        val q = quad
+        return if (q != null) bakeQuad(f, q) else f
+    }
+
+    /** Liga/desliga a transformação em perspetiva; ao desligar, a deformação fica aplicada à seleção. */
+    fun togglePerspective() {
+        val f = floating ?: return
+        val q = quad
+        if (q == null) {
+            quad = f.corners()
+            pivot = null
+        } else {
+            floating = bakeQuad(f, q)
+            quad = null
+            pivot = null
+        }
     }
 
     /** Fixa a seleção na camada de onde saiu (um passo no histórico). */
     fun commitFloating() {
-        val f = floating ?: return
+        val f = bakedFloating() ?: return
         val lid = floatLayerId
         floating = null
         floatOrigin = null
+        quad = null
+        pivot = null
         edit { it.addStroke(lid, BrushStroke(emptyList(), 0, 0f, image = f)) }
     }
 
     fun discardFloating() {
         floating = null
         floatOrigin = null
+        quad = null
+        pivot = null
     }
 
     fun flipFloatingH() {
+        val q = quad
+        if (q != null) {
+            val cx = QuadTransform.centroid(q).x
+            quad = q.map { Point(2f * cx - it.x, it.y) }
+            return
+        }
         val f = floating ?: return
         floating = f.transformed(Affine.flipH(f.bounds().cx))
     }
 
     fun flipFloatingV() {
+        val q = quad
+        if (q != null) {
+            val cy = QuadTransform.centroid(q).y
+            quad = q.map { Point(it.x, 2f * cy - it.y) }
+            return
+        }
         val f = floating ?: return
         floating = f.transformed(Affine.flipV(f.bounds().cy))
     }
 
     fun rotateFloating(deg: Float) {
+        val rad = Math.toRadians(deg.toDouble()).toFloat()
+        val q = quad
+        if (q != null) {
+            quad = QuadTransform.rotate(q, pivot ?: QuadTransform.centroid(q), rad)
+            return
+        }
         val f = floating ?: return
         val b = f.bounds()
-        floating = f.transformed(Affine.around(Point(b.cx, b.cy), 1f, Math.toRadians(deg.toDouble()).toFloat(), 0f, 0f))
+        floating = f.transformed(Affine.around(Point(b.cx, b.cy), 1f, rad, 0f, 0f))
     }
 
     fun resetFloating() {
         floating = floatOrigin
+        val o = floatOrigin
+        if (quad != null && o != null) quad = o.corners()
+        pivot = null
     }
 
     fun copyFloating() {
-        clipImage = floating
+        clipImage = bakedFloating()
     }
 
     fun cutFloating() {
-        clipImage = floating
+        clipImage = bakedFloating()
         discardFloating()
     }
 
     /** Fixa a seleção e deixa uma cópia flutuante no mesmo sítio, pronta a mover. */
     fun duplicateFloating() {
+        if (quad != null) togglePerspective()
         val f = floating ?: return
         val lid = floatLayerId
         commitFloating()
@@ -208,6 +262,8 @@ internal class EditorState(initial: Project) {
         floating = moved
         floatOrigin = moved
         floatLayerId = activeLayerId
+        quad = null
+        pivot = null
     }
 
     // ---- histórico e navegação ----
