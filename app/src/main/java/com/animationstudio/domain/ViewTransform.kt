@@ -63,8 +63,10 @@ data class ViewTransform(
     }
 
     companion object {
-        const val MIN_SCALE = 0.05f
-        const val MAX_SCALE = 32f
+        const val MIN_SCALE = 0.02f
+
+        /** Zoom praticamente ilimitado (1.000.000×): o limite só existe para a aritmética de 32 bits não estourar. */
+        const val MAX_SCALE = 1_000_000f
 
         /** Ajustar à folha: maior escala que mostra a folha inteira, centrada, sem rotação. */
         fun fitSheet(sheetW: Float, sheetH: Float, viewW: Float, viewH: Float, margin: Float = 16f): ViewTransform {

@@ -132,6 +132,27 @@ object StrokeGeometry {
         return StrokeShape(body, start, end, r)
     }
 
+    /**
+     * Traço "humano": espessura uniforme e pontas redondas e naturais. O afinamento fica limitado a ~40% do raio e
+     * a uma ponta curta (cerca de 1,2× a espessura), como uma caneta real. Nunca há "fino-grosso-fino".
+     */
+    fun buildNatural(points: List<Point>, width: Float, taper: Float): StrokeShape {
+        val r = width / 2f
+        if (points.size < 2) return StrokeShape(points, null, null, r)
+        val s = sample(points, (width * 0.2f).coerceIn(0.4f, 3f))
+        if (s.size < 2) return StrokeShape(s, null, null, r)
+        val cum = FloatArray(s.size)
+        for (i in 1 until s.size) cum[i] = cum[i - 1] + hypot(s[i].x - s[i - 1].x, s[i].y - s[i - 1].y)
+        val total = cum[s.size - 1]
+        val t = taper.coerceIn(0f, 1f) * 0.4f
+        val taperLen = min(total / 3f, width * 1.2f + 2f)
+        if (t < 0.03f || taperLen < width * 0.5f) return StrokeShape(s, null, null, r)
+        val body = slice(s, cum, taperLen, total - taperLen).pts
+        val start = ribbon(slice(s, cum, 0f, taperLen), { d -> d }, true, r, taperLen, t)
+        val end = ribbon(slice(s, cum, total - taperLen, total), { d -> total - d }, false, r, taperLen, t)
+        return StrokeShape(body, start, end, r)
+    }
+
     /** [lines] polilinhas paralelas distribuídas pela espessura (para linha dupla, tripla, cerdas…). */
     fun parallel(points: List<Point>, width: Float, lines: Int): ParallelLines {
         val n = max(1, lines)
