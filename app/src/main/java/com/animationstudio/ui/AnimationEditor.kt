@@ -34,12 +34,12 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.ContentCut
 import androidx.compose.material.icons.filled.ContentPaste
 import androidx.compose.material.icons.filled.ControlPointDuplicate
 import androidx.compose.material.icons.filled.CropSquare
-import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.FitScreen
 import androidx.compose.material.icons.filled.Flip
 import androidx.compose.material.icons.filled.Gesture
@@ -47,6 +47,7 @@ import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.RadioButtonUnchecked
 import androidx.compose.material.icons.filled.RestartAlt
 import androidx.compose.material.icons.filled.RotateRight
+import androidx.compose.material.icons.filled.Transform
 import androidx.compose.material3.Icon
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
@@ -102,6 +103,7 @@ import com.animationstudio.domain.LayerKind
 import com.animationstudio.domain.PlayMode
 import com.animationstudio.domain.Point
 import com.animationstudio.domain.Project
+import com.animationstudio.domain.QuadTransform
 import com.animationstudio.domain.StrokeStabilizer
 import com.animationstudio.domain.ViewTransform
 import com.animationstudio.domain.addFill
@@ -474,6 +476,7 @@ fun AnimationEditor(meta: ProjectMeta, initial: Project, store: ProjectStore, on
                         val fid = proj.currentFrameId
                         val live = if (st.isInkTool && st.activePoints.isNotEmpty()) st.makeStroke(st.activePoints.toList()) else null
                         val fl = st.floating
+                        val qd = st.quad
                         val dash = PathEffect.dashPathEffect(floatArrayOf(10f / v.scale, 6f / v.scale))
                         withTransform({ applyView(v) }) {
                             clipRect(0f, 0f, sw, sh) {
@@ -490,10 +493,42 @@ fun AnimationEditor(meta: ProjectMeta, initial: Project, store: ProjectStore, on
                                     }
                                 }
                                 drawFrameLayers(proj, fid, sw, sh, LayerKind.DRAWING, null, true, live, st.activeLayerId)
-                                if (fl != null) drawImageData(fl, null, true)
+                                if (fl != null) {
+                                    if (qd != null) drawWarped(fl, qd) else drawImageData(fl, null, true)
+                                }
                                 drawGridOverlay(st.gridType, st.gridCell, sw, sh, Color(0xFF3DA5FF).copy(alpha = 0.55f), 1f / v.scale)
                             }
-                            if (fl != null) {
+                            if (fl != null && qd != null) {
+                                // Perspetiva: 4 cantos, 4 pegas de aresta (esticar/comprimir), rotação e pivô.
+                                val outline = Path()
+                                outline.moveTo(qd[0].x, qd[0].y)
+                                for (i in 1..3) outline.lineTo(qd[i].x, qd[i].y)
+                                outline.close()
+                                drawPath(outline, StudioColors.Accent, style = Stroke(width = 2f / v.scale, pathEffect = dash))
+                                val hr = 7f / v.scale
+                                for (c in qd) {
+                                    drawCircle(Color.White, hr, Offset(c.x, c.y))
+                                    drawCircle(StudioColors.Accent, hr, Offset(c.x, c.y), style = Stroke(width = 2f / v.scale))
+                                }
+                                for (i in 0 until 4) {
+                                    val m = QuadTransform.edgeMid(qd, i)
+                                    val half = hr * 0.8f
+                                    drawRect(Color.White, Offset(m.x - half, m.y - half), Size(half * 2f, half * 2f))
+                                    drawRect(StudioColors.Accent, Offset(m.x - half, m.y - half), Size(half * 2f, half * 2f), style = Stroke(width = 2f / v.scale))
+                                }
+                                val rh = QuadTransform.rotateHandle(qd, 28f / v.scale)
+                                val tm = QuadTransform.edgeMid(qd, 0)
+                                drawLine(StudioColors.Accent, Offset(tm.x, tm.y), Offset(rh.x, rh.y), strokeWidth = 2f / v.scale)
+                                drawCircle(Color.White, hr, Offset(rh.x, rh.y))
+                                drawCircle(StudioColors.Accent, hr, Offset(rh.x, rh.y), style = Stroke(width = 2f / v.scale))
+                                val pv = st.pivot ?: QuadTransform.centroid(qd)
+                                val pr = hr * 1.3f
+                                drawLine(StudioColors.Accent, Offset(qd[0].x, qd[0].y), Offset(qd[2].x, qd[2].y), strokeWidth = 1f / v.scale, alpha = 0.45f)
+                                drawLine(StudioColors.Accent, Offset(qd[1].x, qd[1].y), Offset(qd[3].x, qd[3].y), strokeWidth = 1f / v.scale, alpha = 0.45f)
+                                drawCircle(Color.White, pr, Offset(pv.x, pv.y))
+                                drawCircle(StudioColors.Accent, pr, Offset(pv.x, pv.y), style = Stroke(width = 2f / v.scale))
+                                drawCircle(StudioColors.Accent, pr * 0.3f, Offset(pv.x, pv.y))
+                            } else if (fl != null) {
                                 val cs = fl.corners()
                                 val outline = Path()
                                 outline.moveTo(cs[0].x, cs[0].y)
@@ -538,7 +573,12 @@ fun AnimationEditor(meta: ProjectMeta, initial: Project, store: ProjectStore, on
                                 if (tool == Tool.LASSO && !navOnly) {
                                     val f0 = st.floating
                                     if (f0 != null) {
-                                        floatMode = hitFloating(f0, st.view, down.position, 26.dp.toPx())
+                                        val q0 = st.quad
+                                        floatMode = if (q0 != null) {
+                                            QuadTransform.hit(q0, st.pivot ?: QuadTransform.centroid(q0), st.view, down.position.x, down.position.y, 26.dp.toPx())
+                                        } else {
+                                            hitFloating(f0, st.view, down.position, 26.dp.toPx())
+                                        }
                                         if (floatMode == 0) st.commitFloating()
                                     }
                                 }
@@ -593,7 +633,15 @@ fun AnimationEditor(meta: ProjectMeta, initial: Project, store: ProjectStore, on
                                             if (pressedCount >= 2 && tool == Tool.LASSO && fl != null) {
                                                 val cur = st.view.screenToProject(Point(c.x, c.y))
                                                 val prev = st.view.screenToProject(Point(c.x - pan.x, c.y - pan.y))
-                                                st.floating = fl.transformed(Affine.around(cur, zoom.coerceIn(0.5f, 2f), rotRad, cur.x - prev.x, cur.y - prev.y))
+                                                val aff = Affine.around(cur, zoom.coerceIn(0.5f, 2f), rotRad, cur.x - prev.x, cur.y - prev.y)
+                                                val q2 = st.quad
+                                                if (q2 != null) {
+                                                    st.quad = q2.map { aff.map(it) }
+                                                    val pv2 = st.pivot
+                                                    if (pv2 != null) st.pivot = aff.map(pv2)
+                                                } else {
+                                                    st.floating = fl.transformed(aff)
+                                                }
                                             } else {
                                                 val focus = Point(c.x, c.y)
                                                 var v = st.view.panBy(pan.x, pan.y)
@@ -625,9 +673,34 @@ fun AnimationEditor(meta: ProjectMeta, initial: Project, store: ProjectStore, on
                                                 }
                                             } else if (floatMode != 0 && !multi) {
                                                 val fl = st.floating
-                                                if (fl != null) {
-                                                    val cur = st.view.screenToProject(Point(ch.position.x, ch.position.y))
-                                                    val prev = st.view.screenToProject(Point(lastScreen.x, lastScreen.y))
+                                                val q = st.quad
+                                                val cur = st.view.screenToProject(Point(ch.position.x, ch.position.y))
+                                                val prev = st.view.screenToProject(Point(lastScreen.x, lastScreen.y))
+                                                if (fl != null && q != null) {
+                                                    // Perspetiva: canto livre, aresta estica/comprime, pivô, rotação em torno do pivô, corpo.
+                                                    val dx = cur.x - prev.x
+                                                    val dy = cur.y - prev.y
+                                                    val pv = st.pivot ?: QuadTransform.centroid(q)
+                                                    when {
+                                                        floatMode == QuadTransform.BODY -> {
+                                                            st.quad = QuadTransform.translate(q, dx, dy)
+                                                            val p0 = st.pivot
+                                                            if (p0 != null) st.pivot = Point(p0.x + dx, p0.y + dy)
+                                                        }
+                                                        floatMode in QuadTransform.CORNER0..(QuadTransform.CORNER0 + 3) -> {
+                                                            val i = floatMode - QuadTransform.CORNER0
+                                                            st.quad = q.mapIndexed { k, p -> if (k == i) Point(p.x + dx, p.y + dy) else p }
+                                                        }
+                                                        floatMode in QuadTransform.EDGE0..(QuadTransform.EDGE0 + 3) ->
+                                                            st.quad = QuadTransform.dragEdge(q, floatMode - QuadTransform.EDGE0, dx, dy)
+                                                        floatMode == QuadTransform.PIVOT -> st.pivot = Point(pv.x + dx, pv.y + dy)
+                                                        floatMode == QuadTransform.ROTATE -> {
+                                                            val a0 = atan2(prev.y - pv.y, prev.x - pv.x)
+                                                            val a1 = atan2(cur.y - pv.y, cur.x - pv.x)
+                                                            st.quad = QuadTransform.rotate(q, pv, a1 - a0)
+                                                        }
+                                                    }
+                                                } else if (fl != null) {
                                                     val b = fl.bounds()
                                                     val cc = Point(b.cx, b.cy)
                                                     when (floatMode) {
@@ -695,6 +768,7 @@ fun AnimationEditor(meta: ProjectMeta, initial: Project, store: ProjectStore, on
                             }
                             if (st.floating != null) {
                                 Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(3.dp)) {
+                                    OverlayIconChip(Icons.Default.Transform, "Perspetiva", selected = st.quad != null) { st.togglePerspective() }
                                     OverlayIconChip(Icons.Default.Flip, "Virar na horizontal") { st.flipFloatingH() }
                                     OverlayIconChip(Icons.Default.Flip, "Virar na vertical", iconRotation = 90f) { st.flipFloatingV() }
                                     OverlayIconChip(Icons.Default.RotateRight, "Rodar 45°") { st.rotateFloating(45f) }
@@ -702,7 +776,7 @@ fun AnimationEditor(meta: ProjectMeta, initial: Project, store: ProjectStore, on
                                     OverlayIconChip(Icons.Default.ContentCut, "Cortar") { st.cutFloating() }
                                     OverlayIconChip(Icons.Default.ControlPointDuplicate, "Duplicar") { st.duplicateFloating() }
                                     OverlayIconChip(Icons.Default.RestartAlt, "Repor") { st.resetFloating() }
-                                    OverlayIconChip(Icons.Default.Delete, "Apagar", danger = true) { st.discardFloating() }
+                                    OverlayIconChip(Icons.Default.Close, "Não confirmar", danger = true) { st.discardFloating() }
                                     OverlayIconChip(Icons.Default.Check, "Confirmar", selected = true) { st.commitFloating() }
                                 }
                             }
