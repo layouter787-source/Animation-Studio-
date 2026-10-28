@@ -21,6 +21,7 @@ import com.animationstudio.domain.LayerKind
 import com.animationstudio.domain.PlayMode
 import com.animationstudio.domain.Point
 import com.animationstudio.domain.Project
+import com.animationstudio.domain.StrokeSmoothing
 import com.animationstudio.domain.ViewTransform
 
 internal enum class Tool { BRUSH, ERASER, BUCKET, LASSO }
@@ -46,6 +47,8 @@ internal class EditorState(initial: Project) {
     var eraserSize by mutableFloatStateOf(24f)
     var eraserOpacity by mutableFloatStateOf(1f)
     var stabilizer by mutableFloatStateOf(0.25f)
+    /** Suavização do traço em percentagem (0..1), aplicada aos pontos do traço. */
+    var smoothing by mutableFloatStateOf(0.4f)
     /** 0 = normal, 1 = desenhar só dentro do que existe, 2 = desenhar por trás do que existe. */
     var drawMode by mutableIntStateOf(0)
 
@@ -106,7 +109,8 @@ internal class EditorState(initial: Project) {
     fun makeStroke(points: List<Point>): BrushStroke {
         val p = BrushLibrary.byId(presetIdOf(tool))
         val erase = tool == Tool.ERASER
-        return BrushStroke(points, strokeColorArgb(), currentSize, erase, null, p.taper, p.hardness, p.id, if (erase) 0 else drawMode)
+        val smooth = StrokeSmoothing.smooth(points, smoothing)
+        return BrushStroke(smooth, strokeColorArgb(), currentSize, erase, null, p.taper, p.hardness, p.id, if (erase) 0 else drawMode)
     }
 
     fun edit(change: (Project) -> Project) {

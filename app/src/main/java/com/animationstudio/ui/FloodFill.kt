@@ -10,14 +10,14 @@ import kotlin.math.ceil
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.roundToInt
+import kotlin.math.sqrt
 
 /**
- * Balde de tinta de qualidade de estúdio:
- *  - referência = o que está visível no frame (todas as camadas), a 2× de resolução em folhas até 1400 px
- *    (bordas suaves ao reduzir) ou até 2048 px no maior lado;
- *  - fecho de frestas: as linhas são engrossadas [gapPx] antes de inundar, e a região volta a crescer até às linhas;
- *  - expansão: a região entra [growPx] por baixo das linhas, sem halo nos contornos suavizados.
- * Chamar fora da thread principal. Devolve null se o ponto está fora da folha.
+ * Balde de tinta rápido (tempo O(pixels), independente do tamanho da fresta):
+ *  - referência = o que está visível no frame, em até ~2 milhões de células (memória baixa, sem estourar a RAM);
+ *  - fecho de frestas por fecho morfológico (dilatar e erodir com somas de prefixos): as frestas fecham sem engrossar as linhas;
+ *  - expansão: a região entra [growPx] por baixo das linhas, sem halo nos contornos.
+ * Chamar fora da thread principal. Devolve null se o ponto está fora da folha ou numa linha.
  */
 internal fun computeFill(
     project: Project,
@@ -29,7 +29,7 @@ internal fun computeFill(
     gapPx: Int,
     growPx: Int,
 ): BrushStroke? {
-    val unit = if (max(sw, sh) <= 1400) 0.5f else max(1f, max(sw, sh) / 2048f)
+    val unit = max(1f, sqrt(sw.toFloat() * sh.toFloat() / 2_000_000f))
     val w = ceil(sw / unit).toInt().coerceAtLeast(1)
     val h = ceil(sh / unit).toInt().coerceAtLeast(1)
     val sx = (seedX / unit).toInt()
@@ -42,93 +42,123 @@ internal fun computeFill(
     val seed = px[sy * w + sx]
     val transparentSeed = (seed ushr 24) <= 24
 
-    fun similar(p: Int): Boolean {
-        val da = abs((p ushr 24) - (seed ushr 24))
-        val dr = abs(((p shr 16) and 0xFF) - ((seed shr 16) and 0xFF))
-        val dg = abs(((p shr 8) and 0xFF) - ((seed shr 8) and 0xFF))
-        val db = abs((p and 0xFF) - (seed and 0xFF))
-        return da + dr + dg + db <= 60
-    }
-
+    val sa = seed ushr 24
+    val sr = (seed shr 16) and 0xFF
+    val sg = (seed shr 8) and 0xFF
+    val sb = seed and 0xFF
     val barrier = BooleanArray(w * h)
     for (i in px.indices) {
         val p = px[i]
-        barrier[i] = if (transparentSeed) (p ushr 24) > 24 else !similar(p)
+        barrier[i] = if (transparentSeed) {
+            (p ushr 24) > 24
+        } else {
+            abs((p ushr 24) - sa) + abs(((p shr 16) and 0xFF) - sr) + abs(((p shr 8) and 0xFF) - sg) + abs((p and 0xFF) - sb) > 60
+        }
     }
 
     val gapCells = (gapPx / unit).roundToInt().coerceIn(0, 24)
     val growCells = (growPx / unit).roundToInt().coerceIn(0, 12)
-    val zone = if (gapCells > 0) dilate(barrier, w, h, gapCells) else barrier
-    // Se o toque está colado a uma linha, não se fecham frestas (senão a semente ficava bloqueada).
-    val blocked = if (zone[sy * w + sx]) barrier else zone
-    if (blocked[sy * w + sx]) return null
+    // Fecho morfológico: tapa frestas até 2×gap sem engrossar as linhas.
+    val closed = if (gapCells > 0) close(barrier, w, h, gapCells) else barrier
+    val blocked = if (closed[sy * w + sx]) barrier else closed
+
+    var start = sy * w + sx
+    if (blocked[start]) {
+        // O toque caiu mesmo em cima de uma linha: procura a célula livre mais próxima.
+        var found = -1
+        search@ for (r in 1..6) {
+            for (dy in -r..r) {
+                for (dx in -r..r) {
+                    val x = sx + dx
+                    val y = sy + dy
+                    if (x < 0 || y < 0 || x >= w || y >= h) continue
+                    if (!blocked[y * w + x]) { found = y * w + x; break@search }
+                }
+            }
+        }
+        if (found < 0) return null
+        start = found
+    }
 
     val visited = BooleanArray(w * h)
     val stack = IntArray(w * h)
     var sp = 0
-    val start = sy * w + sx
     stack[sp++] = start
     visited[start] = true
-    var minX = w
-    var minY = h
-    var maxX = -1
-    var maxY = -1
     while (sp > 0) {
         val i = stack[--sp]
         val x = i % w
         val y = i / w
-        if (x < minX) minX = x
-        if (x > maxX) maxX = x
-        if (y < minY) minY = y
-        if (y > maxY) maxY = y
         if (x > 0 && !visited[i - 1] && !blocked[i - 1]) { visited[i - 1] = true; stack[sp++] = i - 1 }
         if (x < w - 1 && !visited[i + 1] && !blocked[i + 1]) { visited[i + 1] = true; stack[sp++] = i + 1 }
         if (y > 0 && !visited[i - w] && !blocked[i - w]) { visited[i - w] = true; stack[sp++] = i - w }
         if (y < h - 1 && !visited[i + w] && !blocked[i + w]) { visited[i + w] = true; stack[sp++] = i + w }
     }
 
-    // Cresce a região até às linhas e por baixo delas, sem sair da zona das linhas engrossadas.
-    val steps = gapCells + growCells
-    val margin = steps + 1
-    val bx = max(0, minX - margin)
-    val by = max(0, minY - margin)
-    val bw = min(w - 1, maxX + margin) - bx + 1
-    val bh = min(h - 1, maxY + margin) - by + 1
-    var reg = BooleanArray(bw * bh)
-    for (y in 0 until bh) for (x in 0 until bw) reg[y * bw + x] = visited[(by + y) * w + (bx + x)]
-    repeat(steps) {
-        val next = reg.copyOf()
-        for (y in 0 until bh) {
-            for (x in 0 until bw) {
-                if (!reg[y * bw + x]) continue
-                if (x > 0 && zone[(by + y) * w + bx + x - 1]) next[y * bw + x - 1] = true
-                if (x < bw - 1 && zone[(by + y) * w + bx + x + 1]) next[y * bw + x + 1] = true
-                if (y > 0 && zone[(by + y - 1) * w + bx + x]) next[(y - 1) * bw + x] = true
-                if (y < bh - 1 && zone[(by + y + 1) * w + bx + x]) next[(y + 1) * bw + x] = true
+    // Entra por baixo das linhas (expansão) sem passar para lá delas.
+    val region: BooleanArray = if (growCells > 0) {
+        val grown = dilate(visited, w, h, growCells)
+        BooleanArray(w * h) { visited[it] || (grown[it] && blocked[it]) }
+    } else visited
+
+    var minX = w
+    var minY = h
+    var maxX = -1
+    var maxY = -1
+    for (y in 0 until h) {
+        val row = y * w
+        for (x in 0 until w) {
+            if (region[row + x]) {
+                if (x < minX) minX = x
+                if (x > maxX) maxX = x
+                if (y < minY) minY = y
+                if (y > maxY) maxY = y
             }
         }
-        reg = next
     }
-    return BrushStroke(emptyList(), colorArgb, 0f, erase = false, fill = FillRegion.encode(reg, bw, bh, bx, by, unit))
+    if (maxX < 0) return null
+    val bw = maxX - minX + 1
+    val bh = maxY - minY + 1
+    val reg = BooleanArray(bw * bh)
+    for (y in 0 until bh) {
+        System.arraycopy(region, (minY + y) * w + minX, reg, y * bw, bw)
+    }
+    return BrushStroke(emptyList(), colorArgb, 0f, erase = false, fill = FillRegion.encode(reg, bw, bh, minX, minY, unit))
 }
 
+/** Dilatação quadrada de raio [r] em O(n) (somas de prefixos por linha e por coluna). */
 private fun dilate(src: BooleanArray, w: Int, h: Int, r: Int): BooleanArray {
-    var cur = src
-    repeat(r) {
-        val next = cur.copyOf()
-        for (y in 0 until h) {
-            val row = y * w
-            for (x in 0 until w) {
-                if (!cur[row + x]) continue
-                if (x > 0) next[row + x - 1] = true
-                if (x < w - 1) next[row + x + 1] = true
-                if (y > 0) next[row - w + x] = true
-                if (y < h - 1) next[row + w + x] = true
-            }
+    if (r <= 0) return src
+    val tmp = BooleanArray(w * h)
+    val pre = IntArray(max(w, h) + 1)
+    for (y in 0 until h) {
+        val row = y * w
+        for (x in 0 until w) pre[x + 1] = pre[x] + (if (src[row + x]) 1 else 0)
+        for (x in 0 until w) {
+            val a = max(0, x - r)
+            val b = min(w - 1, x + r)
+            tmp[row + x] = pre[b + 1] - pre[a] > 0
         }
-        cur = next
     }
-    return cur
+    val out = BooleanArray(w * h)
+    for (x in 0 until w) {
+        for (y in 0 until h) pre[y + 1] = pre[y] + (if (tmp[y * w + x]) 1 else 0)
+        for (y in 0 until h) {
+            val a = max(0, y - r)
+            val b = min(h - 1, y + r)
+            out[y * w + x] = pre[b + 1] - pre[a] > 0
+        }
+    }
+    return out
+}
+
+/** Fecho morfológico: dilatar e depois erodir (erodir = dilatar o complemento). */
+private fun close(src: BooleanArray, w: Int, h: Int, r: Int): BooleanArray {
+    val dilated = dilate(src, w, h, r)
+    val inverted = BooleanArray(w * h) { !dilated[it] }
+    val eroded = dilate(inverted, w, h, r)
+    // Nas bordas da folha a erosão não deve apagar linhas: nunca fica menos que o original.
+    return BooleanArray(w * h) { src[it] || !eroded[it] }
 }
 
 /** Cor de fundo do papel usada nas exportações e miniaturas. */
