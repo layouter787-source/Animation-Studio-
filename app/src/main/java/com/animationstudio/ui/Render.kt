@@ -51,7 +51,7 @@ import kotlin.math.roundToInt
 import kotlin.math.sin
 
 // ---------------------------------------------------------------------------------------------
-// Traços. Motores: contínuo (pontas afiladas), toques suaves (aerógrafo/aguarela), linhas paralelas
+// Traços. Motores: contínuo (pontas naturais), toques suaves (aerógrafo/aguarela), linhas paralelas
 // (cerdas), carimbos (plantas, luz) e grão de papel aplicado por cima (lápis, carvão).
 // ---------------------------------------------------------------------------------------------
 
@@ -92,7 +92,8 @@ private fun polyline(pts: List<Point>): Path {
 private fun buildPass(s: BrushStroke, width: Float, alpha: Float): InkPass {
     val pts = s.points
     if (pts.size == 1) return InkPass(width, alpha, null, emptyList(), listOf(Offset(pts[0].x, pts[0].y) to width / 2f))
-    val shape = StrokeGeometry.build(pts, width, s.taper)
+    // Ponta "humana": redonda, com no máximo um afinamento discreto.
+    val shape = StrokeGeometry.buildNatural(pts, width, s.taper)
     var body: Path? = null
     if (shape.body.size >= 2) body = polyline(shape.body)
     val polys = ArrayList<Path>()
@@ -269,7 +270,8 @@ private fun buildInk(s: BrushStroke): InkRender {
     if (preset != null && preset.soft) {
         val spacing = 0.08f
         val flow = 1f - Math.pow(0.05, spacing.toDouble()).toFloat()
-        return InkRender(emptyList(), null, StampGeometry.dabs(s.points, s.width, s.taper, spacing), s.hardness.coerceIn(0f, 1f), flow, null, grain)
+        // Toques suaves: afinamento discreto nas pontas (máx. 40%), nunca em agulha.
+        return InkRender(emptyList(), null, StampGeometry.dabs(s.points, s.width, s.taper * 0.4f, spacing), s.hardness.coerceIn(0f, 1f), flow, null, grain)
     }
     if (preset != null && preset.lines > 1) {
         val pl = StrokeGeometry.parallel(s.points, s.width, preset.lines)
@@ -316,16 +318,57 @@ private fun dabImage(hardness: Float): ImageBitmap {
     }
 }
 
+/**
+ * Papel com fibra: ruído de valor com quatro oitavas que repete sem costuras (256 px). Em vez de ruído branco
+ * (pontinhos soltos), o grão forma manchas finas e contínuas, como a textura de um lápis em papel.
+ */
+private val paperNoiseData: FloatArray by lazy { paperNoise(256) }
+
+private fun paperNoise(n: Int): FloatArray {
+    val rnd = java.util.Random(7L)
+    val out = FloatArray(n * n)
+    val octaves = intArrayOf(16, 32, 64, 128)
+    val weights = floatArrayOf(0.18f, 0.30f, 0.32f, 0.20f)
+    for (o in octaves.indices) {
+        val cells = octaves[o]
+        val grid = FloatArray(cells * cells) { rnd.nextFloat() }
+        val cs = n.toFloat() / cells
+        for (y in 0 until n) {
+            val fy = y / cs
+            val y0 = fy.toInt() % cells
+            val y1 = (y0 + 1) % cells
+            val ty0 = fy - fy.toInt()
+            val ty = ty0 * ty0 * (3f - 2f * ty0)
+            for (x in 0 until n) {
+                val fx = x / cs
+                val x0 = fx.toInt() % cells
+                val x1 = (x0 + 1) % cells
+                val tx0 = fx - fx.toInt()
+                val tx = tx0 * tx0 * (3f - 2f * tx0)
+                val a = grid[y0 * cells + x0] + (grid[y0 * cells + x1] - grid[y0 * cells + x0]) * tx
+                val b = grid[y1 * cells + x0] + (grid[y1 * cells + x1] - grid[y1 * cells + x0]) * tx
+                out[y * n + x] += weights[o] * (a + (b - a) * ty)
+            }
+        }
+    }
+    var lo = Float.MAX_VALUE
+    var hi = -Float.MAX_VALUE
+    for (v in out) { if (v < lo) lo = v; if (v > hi) hi = v }
+    val span = max(1e-4f, hi - lo)
+    for (i in out.indices) out[i] = (out[i] - lo) / span
+    return out
+}
+
 private fun grainImage(strength: Float): ImageBitmap {
     val key = (strength.coerceIn(0f, 1f) * 20f).roundToInt()
     return grainCache.getOrPut(key) {
         val s = key / 20f
-        val n = 128
-        val rnd = java.util.Random(7L)
+        val n = 256
+        val noise = paperNoiseData
         val px = IntArray(n * n)
         for (i in px.indices) {
-            val u = Math.pow(rnd.nextDouble(), 0.8).toFloat()
-            val a = (255f * (1f - s * u)).roundToInt().coerceIn(0, 255)
+            // Quanto maior o grão, mais o "vale" do papel deixa de receber grãfite.
+            val a = (255f * (1f - s * noise[i])).roundToInt().coerceIn(0, 255)
             px[i] = (a shl 24) or 0xFFFFFF
         }
         val bmp = Bitmap.createBitmap(n, n, Bitmap.Config.ARGB_8888)
