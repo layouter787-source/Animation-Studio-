@@ -12,6 +12,7 @@ import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.ImageShader
 import androidx.compose.ui.graphics.Matrix
 import androidx.compose.ui.graphics.Paint
+import androidx.compose.ui.graphics.PaintingStyle
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.ShaderBrush
 import androidx.compose.ui.graphics.StrokeCap
@@ -47,12 +48,13 @@ import kotlin.math.PI
 import kotlin.math.cos
 import kotlin.math.hypot
 import kotlin.math.max
+import kotlin.math.min
 import kotlin.math.roundToInt
 import kotlin.math.sin
 
 // ---------------------------------------------------------------------------------------------
-// Traços. Motores: contínuo (pontas naturais), toques suaves (aerógrafo/aguarela), linhas paralelas
-// (cerdas), carimbos (plantas, luz) e grão de papel aplicado por cima (lápis, carvão).
+// Traços. Motores: contínuo (espessura uniforme, pontas redondas), toques suaves (aerógrafo/aguarela),
+// linhas paralelas (cerdas), carimbos (plantas, luz) e grão de papel aplicado por cima (lápis, carvão).
 // ---------------------------------------------------------------------------------------------
 
 private class InkPass(val width: Float, val alpha: Float, val body: Path?, val polys: List<Path>, val tips: List<Pair<Offset, Float>>)
@@ -92,8 +94,8 @@ private fun polyline(pts: List<Point>): Path {
 private fun buildPass(s: BrushStroke, width: Float, alpha: Float): InkPass {
     val pts = s.points
     if (pts.size == 1) return InkPass(width, alpha, null, emptyList(), listOf(Offset(pts[0].x, pts[0].y) to width / 2f))
-    // Ponta "humana": redonda, com no máximo um afinamento discreto.
-    val shape = StrokeGeometry.buildNatural(pts, width, s.taper)
+    // Espessura uniforme e pontas redondas. Só afina as pontas se o utilizador ativar essa opção.
+    val shape = StrokeGeometry.buildNatural(pts, width, if (StudioRender.taperEnds) s.taper else 0f)
     var body: Path? = null
     if (shape.body.size >= 2) body = polyline(shape.body)
     val polys = ArrayList<Path>()
@@ -270,8 +272,8 @@ private fun buildInk(s: BrushStroke): InkRender {
     if (preset != null && preset.soft) {
         val spacing = 0.08f
         val flow = 1f - Math.pow(0.05, spacing.toDouble()).toFloat()
-        // Toques suaves: afinamento discreto nas pontas (máx. 40%), nunca em agulha.
-        return InkRender(emptyList(), null, StampGeometry.dabs(s.points, s.width, s.taper * 0.4f, spacing), s.hardness.coerceIn(0f, 1f), flow, null, grain)
+        val dabTaper = if (StudioRender.taperEnds) s.taper * 0.4f else 0f
+        return InkRender(emptyList(), null, StampGeometry.dabs(s.points, s.width, dabTaper, spacing), s.hardness.coerceIn(0f, 1f), flow, null, grain)
     }
     if (preset != null && preset.lines > 1) {
         val pl = StrokeGeometry.parallel(s.points, s.width, preset.lines)
@@ -377,14 +379,51 @@ private fun grainImage(strength: Float): ImageBitmap {
     }
 }
 
+// Desenho com anti-aliasing (normal) ou sem ele (modo pixelado escolhido pelo utilizador).
+
+private fun pixelPaint(c: Color, blend: BlendMode): Paint {
+    val p = Paint()
+    p.isAntiAlias = false
+    p.color = c
+    p.blendMode = blend
+    return p
+}
+
+private fun DrawScope.strokePath(path: Path, c: Color, width: Float, blend: BlendMode) {
+    if (!StudioRender.pixelated) {
+        drawPath(path, c, style = Stroke(width = width, cap = StrokeCap.Round, join = StrokeJoin.Round), blendMode = blend)
+        return
+    }
+    val p = pixelPaint(c, blend)
+    p.style = PaintingStyle.Stroke
+    p.strokeWidth = width
+    p.strokeCap = StrokeCap.Round
+    p.strokeJoin = StrokeJoin.Round
+    drawContext.canvas.drawPath(path, p)
+}
+
+private fun DrawScope.fillPath(path: Path, c: Color, blend: BlendMode) {
+    if (!StudioRender.pixelated) {
+        drawPath(path, c, blendMode = blend)
+        return
+    }
+    drawContext.canvas.drawPath(path, pixelPaint(c, blend))
+}
+
+private fun DrawScope.dot(c: Color, radius: Float, center: Offset, blend: BlendMode) {
+    if (!StudioRender.pixelated) {
+        drawCircle(c, radius, center, blendMode = blend)
+        return
+    }
+    drawContext.canvas.drawCircle(center, radius, pixelPaint(c, blend))
+}
+
 private fun DrawScope.drawPass(p: InkPass, rgb: Color, blend: BlendMode) {
     val c = rgb.copy(alpha = p.alpha)
     val body = p.body
-    if (body != null) {
-        drawPath(body, c, style = Stroke(width = p.width, cap = StrokeCap.Round, join = StrokeJoin.Round), blendMode = blend)
-    }
-    for (poly in p.polys) drawPath(poly, c, blendMode = blend)
-    for (t in p.tips) drawCircle(c, t.second, t.first, blendMode = blend)
+    if (body != null) strokePath(body, c, p.width, blend)
+    for (poly in p.polys) fillPath(poly, c, blend)
+    for (t in p.tips) dot(c, t.second, t.first, blend)
 }
 
 private fun DrawScope.drawDabs(dabs: List<Stamp>, hardness: Float, flow: Float, rgb: Color, blend: BlendMode) {
@@ -405,11 +444,9 @@ private fun DrawScope.drawRender(r: InkRender, rgb: Color, blend: BlendMode) {
     if (dabs != null) {
         drawDabs(dabs, r.dabHardness, r.dabFlow, rgb, blend)
     } else if (lines != null) {
-        for (l in lines) {
-            drawPath(l.path, rgb.copy(alpha = l.alpha), style = Stroke(width = l.width, cap = StrokeCap.Round, join = StrokeJoin.Round), blendMode = blend)
-        }
+        for (l in lines) strokePath(l.path, rgb.copy(alpha = l.alpha), l.width, blend)
     } else if (buckets != null) {
-        for (b in buckets) drawPath(b.second, rgb.copy(alpha = b.first), blendMode = blend)
+        for (b in buckets) fillPath(b.second, rgb.copy(alpha = b.first), blend)
     } else {
         for (p in r.passes) drawPass(p, rgb, blend)
     }
@@ -460,12 +497,37 @@ internal fun DrawScope.drawInk(s: BrushStroke, tint: Color?, useCache: Boolean) 
 // Preenchimentos (balde), máscaras de borracha e imagens (seleção do laço, importação)
 // ---------------------------------------------------------------------------------------------
 
+/**
+ * Bitmap do preenchimento com borda suavizada (anti-aliasing): a cobertura de cada célula é a média da vizinhança 3×3,
+ * com uma curva que mantém a borda firme. Nas escalas grandes o bitmap é ampliado com filtro bilinear.
+ */
 private fun fillBitmap(f: FillRegion, argb: Int): ImageBitmap {
     val mask = f.decode()
-    val px = IntArray(f.w * f.h)
-    for (i in px.indices) if (mask[i]) px[i] = argb
-    val bmp = Bitmap.createBitmap(f.w, f.h, Bitmap.Config.ARGB_8888)
-    bmp.setPixels(px, 0, f.w, 0, 0, f.w, f.h)
+    val w = f.w
+    val h = f.h
+    val baseA = argb ushr 24
+    val rgb = argb and 0xFFFFFF
+    val px = IntArray(w * h)
+    for (y in 0 until h) {
+        for (x in 0 until w) {
+            var c = 0
+            for (dy in -1..1) {
+                val yy = y + dy
+                if (yy < 0 || yy >= h) continue
+                for (dx in -1..1) {
+                    val xx = x + dx
+                    if (xx < 0 || xx >= w) continue
+                    if (mask[yy * w + xx]) c++
+                }
+            }
+            if (c == 0) continue
+            val cov = ((c / 9f - 0.15f) / 0.7f).coerceIn(0f, 1f)
+            val a = (baseA * cov).roundToInt().coerceIn(0, 255)
+            if (a > 0) px[y * w + x] = (a shl 24) or rgb
+        }
+    }
+    val bmp = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
+    bmp.setPixels(px, 0, w, 0, 0, w, h)
     return bmp.asImageBitmap()
 }
 
