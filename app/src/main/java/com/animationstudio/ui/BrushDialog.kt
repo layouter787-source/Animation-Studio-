@@ -53,6 +53,9 @@ import kotlin.math.roundToInt
 
 private val SizeLog = ln(BrushLimits.MAX_SIZE)
 
+/** Menus e janelas ficam 20% transparentes. */
+private val PopupAlpha = 0.8f
+
 /** Tamanho (1–2000 px) numa escala logarítmica: o controlo fino fica nos tamanhos pequenos. */
 private fun sizeFromSlider(t: Float): Float = exp(t.coerceIn(0f, 1f) * SizeLog).coerceIn(BrushLimits.MIN_SIZE, BrushLimits.MAX_SIZE)
 
@@ -89,9 +92,9 @@ internal fun BrushLibraryDialog(
         Column(Modifier.width(380.dp).fillMaxHeight(0.94f)) {
             Box(
                 Modifier.padding(start = 18.dp).clip(RoundedCornerShape(topStart = 10.dp, topEnd = 10.dp))
-                    .background(StudioColors.Surface3).padding(horizontal = 16.dp, vertical = 4.dp)
+                    .background(StudioColors.Surface3.copy(alpha = PopupAlpha)).padding(horizontal = 16.dp, vertical = 4.dp)
             ) { Text(if (kind == BrushKind.BRUSH) "PINCÉIS" else "BORRACHAS", style = StudioType.Caption.copy(color = StudioColors.Ink)) }
-            Surface(color = StudioColors.Surface, shape = shape, modifier = Modifier.weight(1f).border(1.dp, StudioColors.Outline, shape)) {
+            Surface(color = StudioColors.Surface.copy(alpha = PopupAlpha), shape = shape, modifier = Modifier.weight(1f).border(1.dp, StudioColors.Outline, shape)) {
                 Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
                         Row(
@@ -175,7 +178,7 @@ internal fun BrushLibraryDialog(
     }
 }
 
-/** Definições do pincel em uso (duplo toque): tamanho 1–2000 px, opacidade, estabilizador e modo de desenho. */
+/** Definições do pincel em uso (duplo toque): tamanho 1–2000 px, opacidade, suavização, estabilizador e modo de desenho. */
 @Composable
 internal fun BrushSettingsDialog(
     kind: BrushKind,
@@ -183,17 +186,19 @@ internal fun BrushSettingsDialog(
     size: Float,
     opacity: Float,
     stabilizer: Float,
+    smoothing: Float,
     mode: Int,
     onSize: (Float) -> Unit,
     onOpacity: (Float) -> Unit,
     onStabilizer: (Float) -> Unit,
+    onSmoothing: (Float) -> Unit,
     onMode: (Int) -> Unit,
     onDismiss: () -> Unit,
 ) {
     val shape = RoundedCornerShape(16.dp)
     Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
         Surface(
-            color = StudioColors.Surface, shape = shape,
+            color = StudioColors.Surface.copy(alpha = PopupAlpha), shape = shape,
             modifier = Modifier.width(420.dp).border(1.dp, StudioColors.Outline, shape),
         ) {
             Row(Modifier.padding(12.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -229,6 +234,11 @@ internal fun BrushSettingsDialog(
                         Text("${(opacity * 100).roundToInt()}%", style = StudioType.Number)
                     }
                     StudioSlider(opacity) { onOpacity(it.coerceIn(0.01f, 1f)) }
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                        Text("SUAVIZAÇÃO", style = StudioType.Caption)
+                        Text("${(smoothing * 100).roundToInt()}%", style = StudioType.Number)
+                    }
+                    StudioSlider(smoothing, onSmoothing)
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                         Text("ESTABILIZADOR", style = StudioType.Caption)
                         Text("${(stabilizer * 100).roundToInt()}%", style = StudioType.Number)
