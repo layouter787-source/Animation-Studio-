@@ -52,15 +52,17 @@ class ToolsDomainTest {
         assertEquals(7f, b.maxX, tol)
     }
 
-    @Test fun addFillGoesBelowInkAndAboveOlderFills() {
+    @Test fun addFillKeepsTimeOrderSoEarlierErasersDoNotEraseIt() {
         val init = Project.initial()
         val dl = init.layers[1].id
         val ink = BrushStroke(listOf(Point(0f, 0f), Point(1f, 1f)), black, 2f)
+        val eraser = BrushStroke(listOf(Point(0f, 0f), Point(1f, 1f)), black, 4f, erase = true)
         val f1 = BrushStroke(emptyList(), 0xFFFF0000.toInt(), 0f, fill = FillRegion.encode(BooleanArray(4) { true }, 2, 2, 0, 0, 1f))
         val f2 = BrushStroke(emptyList(), 0xFF00FF00.toInt(), 0f, fill = FillRegion.encode(BooleanArray(4) { true }, 2, 2, 5, 5, 1f))
-        var p = init.addStroke(dl, ink).addFill(dl, f1).addFill(dl, f2)
+        var p = init.addStroke(dl, ink).addStroke(dl, eraser).addFill(dl, f1).addFill(dl, f2)
         val list = p.strokesAt(dl, 0)
-        assertEquals(listOf(f1, f2, ink), list)
+        // O preenchimento vem DEPOIS da borracha: a borracha não o apaga.
+        assertEquals(listOf(ink, eraser, f1, f2), list)
         p = Project.initial().addFill(dl, f1)
         assertEquals(listOf(f1), p.strokesAt(dl, 0))
     }

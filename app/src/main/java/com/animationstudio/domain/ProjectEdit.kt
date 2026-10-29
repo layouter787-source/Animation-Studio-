@@ -14,15 +14,14 @@ private fun Project.updateCurrentStrokes(layerId: Long, f: (List<BrushStroke>) -
     return replaceLayer(layerId) { it.copy(drawings = it.drawings + (d.id to d.copy(strokes = updated))) }
 }
 
-/** Insere o preenchimento por baixo dos traços de tinta e por cima dos preenchimentos anteriores. */
-fun Project.addFill(layerId: Long, fill: BrushStroke): Project {
-    val layer = layers.firstOrNull { it.id == layerId } ?: return this
-    val existing = layer.drawingAt(currentFrameId) ?: return addStroke(layerId, fill)
-    val idx = existing.strokes.indexOfLast { it.fill != null } + 1
-    val list = existing.strokes.toMutableList()
-    list.add(idx, fill)
-    return replaceLayer(layerId) { it.copy(drawings = it.drawings + (existing.id to existing.copy(strokes = list))) }
-}
+/**
+ * Acrescenta o preenchimento no FIM da lista, pela ordem do tempo. O desenho separa depois os preenchimentos
+ * (por baixo) da tinta (por cima), e cada grupo recebe as borrachas pela ordem em que foram feitas. Assim:
+ *  - uma borracha anterior ao balde não apaga o preenchimento novo (pintar sobre uma zona apagada funciona);
+ *  - uma borracha posterior apaga também o preenchimento;
+ *  - um preenchimento novo fica por cima dos antigos e por baixo de toda a tinta.
+ */
+fun Project.addFill(layerId: Long, fill: BrushStroke): Project = addStroke(layerId, fill)
 
 fun Project.transformElements(layerId: Long, indices: Set<Int>, m: Affine): Project =
     updateCurrentStrokes(layerId) { list ->
