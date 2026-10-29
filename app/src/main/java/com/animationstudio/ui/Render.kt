@@ -36,6 +36,7 @@ import com.animationstudio.domain.BrushLibrary
 import com.animationstudio.domain.BrushPreset
 import com.animationstudio.domain.BrushStroke
 import com.animationstudio.domain.FillRegion
+import com.animationstudio.domain.GrainKind
 import com.animationstudio.domain.ImageData
 import com.animationstudio.domain.LayerKind
 import com.animationstudio.domain.Point
@@ -48,15 +49,19 @@ import com.animationstudio.domain.bounds
 import java.util.concurrent.ConcurrentHashMap
 import androidx.compose.ui.graphics.Canvas as GfxCanvas
 import kotlin.math.PI
+import kotlin.math.abs
 import kotlin.math.cos
+import kotlin.math.floor
 import kotlin.math.hypot
 import kotlin.math.max
+import kotlin.math.min
 import kotlin.math.roundToInt
 import kotlin.math.sin
 
 // ---------------------------------------------------------------------------------------------
 // Traços. Motores: contínuo (espessura uniforme, pontas redondas), toques suaves (aerógrafo/aguarela),
-// linhas paralelas (cerdas), carimbos (plantas, luz) e grão de papel aplicado por cima (lápis, carvão).
+// linhas paralelas (cerdas), carimbos (plantas, luz, formas) e textura procedural aplicada por cima
+// (papel, tela, madeira, pedra, nuvem, couro, areia, grunge, metal, concreto).
 // A borracha NUNCA pinta de branco: usa composição DstOut (remove a opacidade do que existe na camada).
 // ---------------------------------------------------------------------------------------------
 
@@ -72,10 +77,12 @@ private class InkRender(
     val dabFlow: Float,
     val lines: List<LineRender>?,
     val grain: Float,
+    val grainKind: GrainKind,
 )
 
 private val dabCache = ConcurrentHashMap<Int, ImageBitmap>()
 private val grainCache = ConcurrentHashMap<Int, ImageBitmap>()
+private val textureCache = ConcurrentHashMap<GrainKind, FloatArray>()
 
 /** A borracha é um pouco maior que o traço: come o fio de anti-aliasing que ficava como "marca" da área apagada. */
 private const val ERASER_BLEED = 1f
@@ -128,6 +135,34 @@ private fun addStamp(path: Path, shape: StampShape, st: Stamp) {
     fun wx(lx: Float, ly: Float) = st.x + lx * c - ly * sn
     fun wy(lx: Float, ly: Float) = st.y + lx * sn + ly * c
     val r = st.size / 2f
+    val twoPi = 2f * PI.toFloat()
+
+    /** Polígono fechado a partir de pares x,y locais. */
+    fun poly(vararg v: Float) {
+        var i = 0
+        while (i + 1 < v.size) {
+            if (i == 0) path.moveTo(wx(v[0], v[1]), wy(v[0], v[1])) else path.lineTo(wx(v[i], v[i + 1]), wy(v[i], v[i + 1]))
+            i += 2
+        }
+        path.close()
+    }
+
+    /** Disco em coordenadas locais. */
+    fun disc(cx: Float, cy: Float, rad: Float) {
+        val x = wx(cx, cy)
+        val y = wy(cx, cy)
+        path.addOval(Rect(x - rad, y - rad, x + rad, y + rad))
+    }
+
+    /** Fita de espessura 2w ao longo de uma polilinha local. */
+    fun ribbon(xs: FloatArray, ys: FloatArray, w: Float) {
+        for (i in xs.indices) {
+            if (i == 0) path.moveTo(wx(xs[i], ys[i] - w), wy(xs[i], ys[i] - w)) else path.lineTo(wx(xs[i], ys[i] - w), wy(xs[i], ys[i] - w))
+        }
+        for (i in xs.indices.reversed()) path.lineTo(wx(xs[i], ys[i] + w), wy(xs[i], ys[i] + w))
+        path.close()
+    }
+
     when (shape) {
         StampShape.GRAIN, StampShape.DOT -> path.addOval(Rect(st.x - r, st.y - r, st.x + r, st.y + r))
         StampShape.STAR -> {
@@ -249,6 +284,207 @@ private fun addStamp(path: Path, shape: StampShape, st: Stamp) {
             spike(len * 0.35f, 0f, len * 0.7f, -len * 0.32f, w * 0.8f)
             spike(len * 0.55f, 0f, len * 0.88f, len * 0.3f, w * 0.8f)
         }
+        // ---- Formas geométricas ----
+        StampShape.SQUARE -> poly(-r, -r, r, -r, r, r, -r, r)
+        StampShape.TRIANGLE -> poly(0f, -r, r, r * 0.8f, -r, r * 0.8f)
+        StampShape.DIAMOND -> poly(0f, -r, r, 0f, 0f, r, -r, 0f)
+        StampShape.HEXAGON -> {
+            for (i in 0 until 6) {
+                val a = i * (PI.toFloat() / 3f)
+                val lx = cos(a) * r
+                val ly = sin(a) * r
+                if (i == 0) path.moveTo(wx(lx, ly), wy(lx, ly)) else path.lineTo(wx(lx, ly), wy(lx, ly))
+            }
+            path.close()
+        }
+        StampShape.RING, StampShape.BUBBLE -> {
+            val n = 20
+            for (i in 0..n) {
+                val a = i * twoPi / n
+                val lx = cos(a) * r
+                val ly = sin(a) * r
+                if (i == 0) path.moveTo(wx(lx, ly), wy(lx, ly)) else path.lineTo(wx(lx, ly), wy(lx, ly))
+            }
+            path.close()
+            // Anel interior com sentido contrário: faz o buraco.
+            for (i in 0..n) {
+                val a = -i * twoPi / n
+                val lx = cos(a) * r * 0.62f
+                val ly = sin(a) * r * 0.62f
+                if (i == 0) path.moveTo(wx(lx, ly), wy(lx, ly)) else path.lineTo(wx(lx, ly), wy(lx, ly))
+            }
+            path.close()
+            if (shape == StampShape.BUBBLE) disc(-r * 0.3f, -r * 0.3f, r * 0.13f)
+        }
+        StampShape.HEART -> {
+            path.moveTo(wx(0f, r * 0.9f), wy(0f, r * 0.9f))
+            path.cubicTo(wx(-r * 1.3f, r * 0.1f), wy(-r * 1.3f, r * 0.1f), wx(-r * 0.7f, -r * 0.9f), wy(-r * 0.7f, -r * 0.9f), wx(0f, -r * 0.35f), wy(0f, -r * 0.35f))
+            path.cubicTo(wx(r * 0.7f, -r * 0.9f), wy(r * 0.7f, -r * 0.9f), wx(r * 1.3f, r * 0.1f), wy(r * 1.3f, r * 0.1f), wx(0f, r * 0.9f), wy(0f, r * 0.9f))
+            path.close()
+        }
+        StampShape.CROWN -> poly(-r, r * 0.7f, -r, -r * 0.4f, -r * 0.5f, r * 0.1f, 0f, -r * 0.8f, r * 0.5f, r * 0.1f, r, -r * 0.4f, r, r * 0.7f)
+        StampShape.SPIRAL -> {
+            val n = 48
+            val w = max(0.5f, r * 0.08f)
+            val sx = FloatArray(n + 1)
+            val sy = FloatArray(n + 1)
+            for (i in 0..n) {
+                val t = i / n.toFloat()
+                val a = t * 2.5f * twoPi
+                sx[i] = cos(a) * r * t
+                sy[i] = sin(a) * r * t
+            }
+            val nx = FloatArray(n + 1)
+            val ny = FloatArray(n + 1)
+            for (i in 0..n) {
+                val j0 = max(i - 1, 0)
+                val j1 = min(i + 1, n)
+                val tx = sx[j1] - sx[j0]
+                val ty = sy[j1] - sy[j0]
+                val l = max(1e-4f, hypot(tx, ty))
+                nx[i] = -ty / l * w
+                ny[i] = tx / l * w
+            }
+            for (i in 0..n) {
+                val lx = sx[i] + nx[i]
+                val ly = sy[i] + ny[i]
+                if (i == 0) path.moveTo(wx(lx, ly), wy(lx, ly)) else path.lineTo(wx(lx, ly), wy(lx, ly))
+            }
+            for (i in n downTo 0) path.lineTo(wx(sx[i] - nx[i], sy[i] - ny[i]), wy(sx[i] - nx[i], sy[i] - ny[i]))
+            path.close()
+        }
+        StampShape.ARROW -> poly(-r, -r * 0.2f, r * 0.3f, -r * 0.2f, r * 0.3f, -r * 0.6f, r, 0f, r * 0.3f, r * 0.6f, r * 0.3f, r * 0.2f, -r, r * 0.2f)
+        StampShape.CROSS -> poly(
+            -r * 0.3f, -r, r * 0.3f, -r, r * 0.3f, -r * 0.3f, r, -r * 0.3f, r, r * 0.3f, r * 0.3f, r * 0.3f,
+            r * 0.3f, r, -r * 0.3f, r, -r * 0.3f, r * 0.3f, -r, r * 0.3f, -r, -r * 0.3f, -r * 0.3f, -r * 0.3f,
+        )
+        StampShape.DROPLET -> {
+            path.moveTo(wx(0f, -r), wy(0f, -r))
+            path.cubicTo(wx(r * 0.9f, r * 0.1f), wy(r * 0.9f, r * 0.1f), wx(r * 0.8f, r), wy(r * 0.8f, r), wx(0f, r), wy(0f, r))
+            path.cubicTo(wx(-r * 0.8f, r), wy(-r * 0.8f, r), wx(-r * 0.9f, r * 0.1f), wy(-r * 0.9f, r * 0.1f), wx(0f, -r), wy(0f, -r))
+            path.close()
+        }
+        StampShape.SPLAT -> {
+            val n = 14
+            for (i in 0 until n) {
+                val a = i * twoPi / n
+                val rad = r * (0.55f + 0.45f * abs(sin(i * 1.7f + st.rotation * 4f)))
+                val lx = cos(a) * rad
+                val ly = sin(a) * rad
+                if (i == 0) path.moveTo(wx(lx, ly), wy(lx, ly)) else path.lineTo(wx(lx, ly), wy(lx, ly))
+            }
+            path.close()
+            disc(cos(3f) * r * 1.05f, sin(3f) * r * 1.05f, r * 0.12f)
+            disc(cos(5.2f) * r * 1.1f, sin(5.2f) * r * 1.1f, r * 0.08f)
+        }
+        StampShape.BRICK -> poly(-r, -r * 0.5f, r, -r * 0.5f, r, r * 0.5f, -r, r * 0.5f)
+        StampShape.FLOWER -> {
+            for (i in 0 until 5) {
+                val a = i * twoPi / 5f
+                disc(cos(a) * r * 0.5f, sin(a) * r * 0.5f, r * 0.36f)
+            }
+            disc(0f, 0f, r * 0.22f)
+        }
+        StampShape.CONIFER -> {
+            poly(0f, -r, r * 0.6f, -r * 0.2f, -r * 0.6f, -r * 0.2f)
+            poly(0f, -r * 0.5f, r * 0.8f, r * 0.4f, -r * 0.8f, r * 0.4f)
+            poly(0f, r * 0.1f, r, r * 0.9f, -r, r * 0.9f)
+            poly(-r * 0.12f, r * 0.9f, r * 0.12f, r * 0.9f, r * 0.12f, r * 1.1f, -r * 0.12f, r * 1.1f)
+        }
+        StampShape.ROUNDTREE -> {
+            disc(0f, -r * 0.25f, r * 0.65f)
+            disc(-r * 0.45f, -r * 0.05f, r * 0.45f)
+            disc(r * 0.45f, -r * 0.05f, r * 0.45f)
+            poly(-r * 0.1f, r * 0.3f, r * 0.1f, r * 0.3f, r * 0.1f, r, -r * 0.1f, r)
+        }
+        StampShape.BAMBOO -> {
+            poly(-r * 0.1f, -r, r * 0.1f, -r, r * 0.1f, r, -r * 0.1f, r)
+            poly(-r * 0.16f, -r * 0.35f, r * 0.16f, -r * 0.35f, r * 0.16f, -r * 0.28f, -r * 0.16f, -r * 0.28f)
+            poly(-r * 0.16f, r * 0.4f, r * 0.16f, r * 0.4f, r * 0.16f, r * 0.47f, -r * 0.16f, r * 0.47f)
+            poly(r * 0.1f, -r * 0.3f, r * 0.85f, -r * 0.55f, r * 0.1f, -r * 0.12f)
+        }
+        StampShape.MOUNTAIN -> poly(-r, r * 0.7f, -r * 0.3f, -r * 0.6f, 0f, -r * 0.1f, r * 0.3f, -r, r, r * 0.7f)
+        StampShape.PUFF -> {
+            disc(0f, 0f, r * 0.6f)
+            disc(-r * 0.5f, r * 0.15f, r * 0.42f)
+            disc(r * 0.5f, r * 0.15f, r * 0.42f)
+            disc(0f, -r * 0.3f, r * 0.45f)
+        }
+        StampShape.WAVE -> {
+            val n = 16
+            val xs = FloatArray(n + 1) { -r + 2f * r * it / n }
+            val ys = FloatArray(n + 1) { sin(it / n.toFloat() * twoPi) * r * 0.35f }
+            ribbon(xs, ys, max(0.8f, r * 0.1f))
+        }
+        StampShape.ZIGZAG -> {
+            val xs = FloatArray(5) { -r + 2f * r * it / 4f }
+            val ys = floatArrayOf(0f, -0.3f * r, 0.3f * r, -0.3f * r, 0f)
+            ribbon(xs, ys, max(0.8f, r * 0.08f))
+        }
+        StampShape.SCRATCH -> {
+            val w = max(0.4f, r * 0.05f)
+            poly(-r, 0f, -r * 0.2f, -w, r * 0.5f, -w * 0.5f, r, 0f, r * 0.4f, w, -r * 0.3f, w * 0.4f)
+        }
+        StampShape.BURST -> {
+            val w = max(0.4f, r * 0.06f)
+            for (i in 0 until 12) {
+                val ang = i * (PI.toFloat() / 6f)
+                val ax = cos(ang) * r
+                val ay = sin(ang) * r
+                val qx = -sin(ang) * w
+                val qy = cos(ang) * w
+                path.moveTo(wx(qx, qy), wy(qx, qy))
+                path.lineTo(wx(ax, ay), wy(ax, ay))
+                path.lineTo(wx(-qx, -qy), wy(-qx, -qy))
+                path.close()
+            }
+        }
+        StampShape.LINE -> {
+            val w = max(0.6f, r * 0.05f)
+            poly(-r, -w, r, -w, r, w, -r, w)
+        }
+        StampShape.CACTUS -> {
+            poly(-r * 0.18f, -r, r * 0.18f, -r, r * 0.18f, r, -r * 0.18f, r)
+            poly(-r * 0.18f, r * 0.1f, -r * 0.7f, r * 0.1f, -r * 0.7f, -r * 0.5f, -r * 0.5f, -r * 0.5f, -r * 0.5f, -r * 0.1f, -r * 0.18f, -r * 0.1f)
+            poly(r * 0.18f, r * 0.2f, r * 0.7f, r * 0.2f, r * 0.7f, -r * 0.4f, r * 0.5f, -r * 0.4f, r * 0.5f, 0f, r * 0.18f, 0f)
+        }
+        StampShape.ROCK -> {
+            val n = 9
+            for (i in 0 until n) {
+                val a = i * twoPi / n
+                val rad = r * (0.7f + 0.3f * sin(i * 2.3f + st.rotation * 5f))
+                val lx = cos(a) * rad
+                val ly = sin(a) * rad * 0.8f
+                if (i == 0) path.moveTo(wx(lx, ly), wy(lx, ly)) else path.lineTo(wx(lx, ly), wy(lx, ly))
+            }
+            path.close()
+        }
+        StampShape.FERN -> {
+            poly(-r * 0.04f, -r, r * 0.04f, -r, r * 0.04f, r, -r * 0.04f, r)
+            for (k in 0..5) {
+                val y = r * 0.8f - k * r * 0.32f
+                val len = r * (0.7f - k * 0.09f)
+                poly(0f, y, len, y - r * 0.2f, 0f, y - r * 0.08f)
+                poly(0f, y, -len, y - r * 0.2f, 0f, y - r * 0.08f)
+            }
+        }
+        StampShape.STAR5 -> {
+            for (i in 0 until 10) {
+                val a = -PI.toFloat() / 2f + i * (PI.toFloat() / 5f)
+                val rad = if (i % 2 == 0) r else r * 0.42f
+                val lx = cos(a) * rad
+                val ly = sin(a) * rad
+                if (i == 0) path.moveTo(wx(lx, ly), wy(lx, ly)) else path.lineTo(wx(lx, ly), wy(lx, ly))
+            }
+            path.close()
+        }
+        StampShape.FLAME -> {
+            path.moveTo(wx(r * 0.1f, -r), wy(r * 0.1f, -r))
+            path.cubicTo(wx(r * 1.0f, -r * 0.1f), wy(r * 1.0f, -r * 0.1f), wx(r * 0.6f, r), wy(r * 0.6f, r), wx(0f, r), wy(0f, r))
+            path.cubicTo(wx(-r * 0.7f, r), wy(-r * 0.7f, r), wx(-r * 0.8f, -r * 0.1f), wy(-r * 0.8f, -r * 0.1f), wx(-r * 0.1f, -r * 0.4f), wy(-r * 0.1f, -r * 0.4f))
+            path.cubicTo(wx(0f, -r * 0.5f), wy(0f, -r * 0.5f), wx(r * 0.1f, -r * 0.7f), wy(r * 0.1f, -r * 0.7f), wx(r * 0.1f, -r), wy(r * 0.1f, -r))
+            path.close()
+        }
         StampShape.NONE -> {}
     }
 }
@@ -272,25 +508,26 @@ private fun buildStamps(s: BrushStroke, preset: BrushPreset): List<Pair<Float, P
 private fun buildInk(s: BrushStroke): InkRender {
     val preset = if (s.brush.isNotEmpty()) BrushLibrary.byIdOrNull(s.brush) else null
     val grain = preset?.grain ?: 0f
+    val gk = preset?.texture ?: GrainKind.PAPER
     if (preset != null && preset.stamp != StampShape.NONE) {
-        return InkRender(emptyList(), buildStamps(s, preset), null, 0f, 0f, null, grain)
+        return InkRender(emptyList(), buildStamps(s, preset), null, 0f, 0f, null, grain, gk)
     }
     if (preset != null && preset.soft) {
         val spacing = 0.08f
         val flow = 1f - Math.pow(0.05, spacing.toDouble()).toFloat()
         val dabTaper = if (StudioRender.taperEnds) s.taper * 0.4f else 0f
-        return InkRender(emptyList(), null, StampGeometry.dabs(s.points, s.width, dabTaper, spacing), s.hardness.coerceIn(0f, 1f), flow, null, grain)
+        return InkRender(emptyList(), null, StampGeometry.dabs(s.points, s.width, dabTaper, spacing), s.hardness.coerceIn(0f, 1f), flow, null, grain, gk)
     }
     if (preset != null && preset.lines > 1) {
         val pl = StrokeGeometry.parallel(s.points, s.width, preset.lines)
         val rnd = java.util.Random(seedOf(s))
         val lines = pl.lines.map { pts -> LineRender(polyline(pts), pl.lineWidth, 1f - preset.lineJitter * rnd.nextFloat()) }
-        return InkRender(emptyList(), null, null, 0f, 0f, lines, grain)
+        return InkRender(emptyList(), null, null, 0f, 0f, lines, grain, gk)
     }
     // A borracha de traço contínuo é ligeiramente mais larga (sangra ERASER_BLEED) para não deixar fio de cor.
     val w = if (s.erase) s.width + ERASER_BLEED else s.width
     val h = s.hardness.coerceIn(0f, 1f)
-    if (h > 0.95f) return InkRender(listOf(buildPass(s, w, 1f)), null, null, 0f, 0f, null, grain)
+    if (h > 0.95f) return InkRender(listOf(buildPass(s, w, 1f)), null, null, 0f, 0f, null, grain, gk)
     // Traços antigos com borda suave: passagens empilhadas.
     val core = w * (0.4f + 0.6f * h)
     val span = w - core
@@ -301,7 +538,7 @@ private fun buildInk(s: BrushStroke): InkRender {
             buildPass(s, core + span * 0.33f, 0.3f),
             buildPass(s, core, 1f),
         ),
-        null, null, 0f, 0f, null, grain,
+        null, null, 0f, 0f, null, grain, gk,
     )
 }
 
@@ -328,56 +565,147 @@ private fun dabImage(hardness: Float): ImageBitmap {
     }
 }
 
-/**
- * Papel com fibra: ruído de valor com quatro oitavas que repete sem costuras (256 px). Em vez de ruído branco
- * (pontinhos soltos), o grão forma manchas finas e contínuas, como a textura de um lápis em papel.
- */
-private val paperNoiseData: FloatArray by lazy { paperNoise(256) }
+// ---------------------------------------------------------------------------------------------
+// Texturas procedurais (256×256, repetem sem costuras). Tudo gerado por código.
+// ---------------------------------------------------------------------------------------------
 
-private fun paperNoise(n: Int): FloatArray {
-    val rnd = java.util.Random(7L)
+/** Ruído de valor com [cx]×[cy] células por azulejo, interpolado com suavização; repete sem costuras. */
+private fun valueNoise(n: Int, cx: Int, cy: Int, rnd: java.util.Random): FloatArray {
+    val grid = FloatArray(cx * cy) { rnd.nextFloat() }
     val out = FloatArray(n * n)
-    val octaves = intArrayOf(16, 32, 64, 128)
-    val weights = floatArrayOf(0.18f, 0.30f, 0.32f, 0.20f)
-    for (o in octaves.indices) {
-        val cells = octaves[o]
-        val grid = FloatArray(cells * cells) { rnd.nextFloat() }
-        val cs = n.toFloat() / cells
-        for (y in 0 until n) {
-            val fy = y / cs
-            val y0 = fy.toInt() % cells
-            val y1 = (y0 + 1) % cells
-            val ty0 = fy - fy.toInt()
-            val ty = ty0 * ty0 * (3f - 2f * ty0)
-            for (x in 0 until n) {
-                val fx = x / cs
-                val x0 = fx.toInt() % cells
-                val x1 = (x0 + 1) % cells
-                val tx0 = fx - fx.toInt()
-                val tx = tx0 * tx0 * (3f - 2f * tx0)
-                val a = grid[y0 * cells + x0] + (grid[y0 * cells + x1] - grid[y0 * cells + x0]) * tx
-                val b = grid[y1 * cells + x0] + (grid[y1 * cells + x1] - grid[y1 * cells + x0]) * tx
-                out[y * n + x] += weights[o] * (a + (b - a) * ty)
-            }
+    val sx = n.toFloat() / cx
+    val sy = n.toFloat() / cy
+    for (y in 0 until n) {
+        val fy = y / sy
+        val y0 = fy.toInt() % cy
+        val y1 = (y0 + 1) % cy
+        val t0 = fy - fy.toInt()
+        val ty = t0 * t0 * (3f - 2f * t0)
+        for (x in 0 until n) {
+            val fx = x / sx
+            val x0 = fx.toInt() % cx
+            val x1 = (x0 + 1) % cx
+            val u0 = fx - fx.toInt()
+            val tx = u0 * u0 * (3f - 2f * u0)
+            val a = grid[y0 * cx + x0] + (grid[y0 * cx + x1] - grid[y0 * cx + x0]) * tx
+            val b = grid[y1 * cx + x0] + (grid[y1 * cx + x1] - grid[y1 * cx + x0]) * tx
+            out[y * n + x] = a + (b - a) * ty
         }
     }
-    var lo = Float.MAX_VALUE
-    var hi = -Float.MAX_VALUE
-    for (v in out) { if (v < lo) lo = v; if (v > hi) hi = v }
-    val span = max(1e-4f, hi - lo)
-    for (i in out.indices) out[i] = (out[i] - lo) / span
     return out
 }
 
-private fun grainImage(strength: Float): ImageBitmap {
+private fun normalized(a: FloatArray): FloatArray {
+    var lo = Float.MAX_VALUE
+    var hi = -Float.MAX_VALUE
+    for (v in a) { if (v < lo) lo = v; if (v > hi) hi = v }
+    val span = max(1e-4f, hi - lo)
+    return FloatArray(a.size) { (a[it] - lo) / span }
+}
+
+private fun blendNoise(n: Int, parts: List<Pair<FloatArray, Float>>): FloatArray {
+    val out = FloatArray(n * n)
+    for ((arr, w) in parts) for (i in out.indices) out[i] += arr[i] * w
+    return normalized(out)
+}
+
+/** Ruído celular (Worley): distância ao ponto mais próximo (f1) e ao segundo (f2), repete sem costuras. */
+private fun worley(n: Int, cells: Int, rnd: java.util.Random): Pair<FloatArray, FloatArray> {
+    val ptx = FloatArray(cells * cells) { rnd.nextFloat() }
+    val pty = FloatArray(cells * cells) { rnd.nextFloat() }
+    val f1 = FloatArray(n * n)
+    val f2 = FloatArray(n * n)
+    val k = cells.toFloat() / n
+    for (y in 0 until n) {
+        val v = y * k
+        val cy0 = floor(v).toInt()
+        for (x in 0 until n) {
+            val u = x * k
+            val cx0 = floor(u).toInt()
+            var m1 = 9f
+            var m2 = 9f
+            for (dy in -1..1) {
+                for (dx in -1..1) {
+                    val ncx = cx0 + dx
+                    val ncy = cy0 + dy
+                    val idx = (((ncy % cells) + cells) % cells) * cells + (((ncx % cells) + cells) % cells)
+                    val ddx = ncx + ptx[idx] - u
+                    val ddy = ncy + pty[idx] - v
+                    val d = hypot(ddx, ddy)
+                    if (d < m1) { m2 = m1; m1 = d } else if (d < m2) m2 = d
+                }
+            }
+            f1[y * n + x] = (m1 / 1.1f).coerceIn(0f, 1f)
+            f2[y * n + x] = (m2 / 1.4f).coerceIn(0f, 1f)
+        }
+    }
+    return f1 to f2
+}
+
+private fun generateTexture(kind: GrainKind, n: Int): FloatArray {
+    val rnd = java.util.Random(7L + kind.ordinal)
+    val twoPi = 2f * PI.toFloat()
+    return when (kind) {
+        GrainKind.PAPER -> blendNoise(
+            n, listOf(valueNoise(n, 16, 16, rnd) to 0.18f, valueNoise(n, 32, 32, rnd) to 0.30f, valueNoise(n, 64, 64, rnd) to 0.32f, valueNoise(n, 128, 128, rnd) to 0.20f),
+        )
+        GrainKind.CANVAS -> {
+            val weave = FloatArray(n * n) { i ->
+                val x = i % n
+                val y = i / n
+                (sin(twoPi * x / 8f) * 0.5f + 0.5f) * (sin(twoPi * y / 8f) * 0.5f + 0.5f)
+            }
+            blendNoise(n, listOf(weave to 0.65f, valueNoise(n, 64, 64, rnd) to 0.35f))
+        }
+        GrainKind.WOOD -> blendNoise(n, listOf(valueNoise(n, 3, 96, rnd) to 0.6f, valueNoise(n, 6, 160, rnd) to 0.4f))
+        GrainKind.STONE -> {
+            val f1 = worley(n, 10, rnd).first
+            val inv = FloatArray(n * n) { 1f - f1[it] }
+            blendNoise(n, listOf(inv to 0.5f, valueNoise(n, 16, 16, rnd) to 0.25f, valueNoise(n, 48, 48, rnd) to 0.25f))
+        }
+        GrainKind.CLOUD -> blendNoise(
+            n, listOf(valueNoise(n, 4, 4, rnd) to 0.45f, valueNoise(n, 8, 8, rnd) to 0.30f, valueNoise(n, 16, 16, rnd) to 0.15f, valueNoise(n, 32, 32, rnd) to 0.10f),
+        )
+        GrainKind.LEATHER -> {
+            val (f1, f2) = worley(n, 24, rnd)
+            val edge = FloatArray(n * n) { f2[it] - f1[it] }
+            blendNoise(n, listOf(edge to 0.8f, valueNoise(n, 64, 64, rnd) to 0.2f))
+        }
+        GrainKind.SAND -> {
+            val white = FloatArray(n * n) { rnd.nextFloat() }
+            blendNoise(n, listOf(valueNoise(n, 128, 128, rnd) to 0.5f, white to 0.5f))
+        }
+        GrainKind.GRUNGE -> {
+            val base = blendNoise(
+                n, listOf(valueNoise(n, 6, 6, rnd) to 0.3f, valueNoise(n, 12, 12, rnd) to 0.25f, valueNoise(n, 24, 24, rnd) to 0.2f, valueNoise(n, 48, 48, rnd) to 0.15f, valueNoise(n, 96, 96, rnd) to 0.1f),
+            )
+            FloatArray(n * n) { i ->
+                val t = ((base[i] - 0.35f) / 0.3f).coerceIn(0f, 1f)
+                t * t * (3f - 2f * t)
+            }
+        }
+        GrainKind.METAL -> blendNoise(n, listOf(valueNoise(n, 2, 160, rnd) to 0.7f, valueNoise(n, 4, 200, rnd) to 0.3f))
+        GrainKind.CONCRETE -> {
+            val base = blendNoise(
+                n, listOf(valueNoise(n, 8, 8, rnd) to 0.3f, valueNoise(n, 16, 16, rnd) to 0.3f, valueNoise(n, 32, 32, rnd) to 0.25f, valueNoise(n, 64, 64, rnd) to 0.15f),
+            )
+            repeat(500) { base[rnd.nextInt(base.size)] = 1f }
+            base
+        }
+    }
+}
+
+private fun textureData(kind: GrainKind): FloatArray = textureCache.getOrPut(kind) { generateTexture(kind, 256) }
+
+private fun grainImage(kind: GrainKind, strength: Float): ImageBitmap {
     val key = (strength.coerceIn(0f, 1f) * 20f).roundToInt()
-    return grainCache.getOrPut(key) {
+    return grainCache.getOrPut(kind.ordinal * 100 + key) {
         val s = key / 20f
         val n = 256
-        val noise = paperNoiseData
+        val noise = textureData(kind)
         val px = IntArray(n * n)
         for (i in px.indices) {
-            // Quanto maior o grão, mais o "vale" do papel deixa de receber grãfite.
+            // Quanto maior o grão, mais os "vales" da textura deixam de receber tinta.
             val a = (255f * (1f - s * noise[i])).roundToInt().coerceIn(0, 255)
             px[i] = (a shl 24) or 0xFFFFFF
         }
@@ -460,16 +788,16 @@ private fun DrawScope.drawRender(r: InkRender, rgb: Color, blend: BlendMode) {
     }
 }
 
-/** Grão do papel: mantém o traço só onde a textura (fixa na folha) tem opacidade. */
-private fun DrawScope.drawGrain(strength: Float, r: Rect) {
-    val shader = ImageShader(grainImage(strength), TileMode.Repeated, TileMode.Repeated)
+/** Textura do material: mantém o traço só onde a textura (fixa na folha) tem opacidade. */
+private fun DrawScope.drawGrain(strength: Float, kind: GrainKind, r: Rect) {
+    val shader = ImageShader(grainImage(kind, strength), TileMode.Repeated, TileMode.Repeated)
     drawRect(ShaderBrush(shader), r.topLeft, r.size, blendMode = BlendMode.DstIn)
 }
 
 /**
  * Desenha um traço. A opacidade vem do alfa da cor; a borracha usa DstOut (apaga a opacidade, não pinta de branco).
- * Com opacidade < 100%, modo "dentro"/"por trás", toques suaves ou grão, as peças são desenhadas numa camada que
- * depois recebe o alfa, o modo e o grão, para não escurecer onde as peças se sobrepõem.
+ * Com opacidade < 100%, modo "dentro"/"por trás", toques suaves ou textura, as peças são desenhadas numa camada que
+ * depois recebe o alfa, o modo e a textura, para não escurecer onde as peças se sobrepõem.
  */
 internal fun DrawScope.drawInk(s: BrushStroke, tint: Color?, useCache: Boolean) {
     if (s.points.isEmpty()) return
@@ -499,7 +827,7 @@ internal fun DrawScope.drawInk(s: BrushStroke, tint: Color?, useCache: Boolean) 
     paint.blendMode = layerBlend
     drawContext.canvas.saveLayer(rect, paint)
     drawRender(render, rgb, BlendMode.SrcOver)
-    if (render.grain > 0f) drawGrain(render.grain, rect)
+    if (render.grain > 0f) drawGrain(render.grain, render.grainKind, rect)
     drawContext.canvas.restore()
 }
 
