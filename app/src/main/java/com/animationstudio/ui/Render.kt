@@ -8,6 +8,7 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.BlendMode
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ColorFilter
+import androidx.compose.ui.graphics.FilterQuality
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.ImageShader
 import androidx.compose.ui.graphics.Matrix
@@ -27,6 +28,8 @@ import androidx.compose.ui.graphics.drawscope.clipRect
 import androidx.compose.ui.graphics.drawscope.withTransform
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.unit.Density
+import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.LayoutDirection
 import com.animationstudio.domain.BrushKind
 import com.animationstudio.domain.BrushLibrary
@@ -504,49 +507,37 @@ internal fun DrawScope.drawInk(s: BrushStroke, tint: Color?, useCache: Boolean) 
 // Preenchimentos (balde), máscaras de borracha e imagens (seleção do laço, importação)
 // ---------------------------------------------------------------------------------------------
 
-/**
- * Bitmap do preenchimento com borda suavizada (anti-aliasing): a cobertura de cada célula é a média da vizinhança 3×3,
- * com uma curva que mantém a borda firme. Nas escalas grandes o bitmap é ampliado com filtro bilinear.
- */
+/** Bitmap do preenchimento: células inteiras (píxeis nítidos, sem desfocar). */
 private fun fillBitmap(f: FillRegion, argb: Int): ImageBitmap {
     val mask = f.decode()
-    val w = f.w
-    val h = f.h
-    val baseA = argb ushr 24
-    val rgb = argb and 0xFFFFFF
-    val px = IntArray(w * h)
-    for (y in 0 until h) {
-        for (x in 0 until w) {
-            var c = 0
-            for (dy in -1..1) {
-                val yy = y + dy
-                if (yy < 0 || yy >= h) continue
-                for (dx in -1..1) {
-                    val xx = x + dx
-                    if (xx < 0 || xx >= w) continue
-                    if (mask[yy * w + xx]) c++
-                }
-            }
-            if (c == 0) continue
-            val cov = ((c / 9f - 0.15f) / 0.7f).coerceIn(0f, 1f)
-            val a = (baseA * cov).roundToInt().coerceIn(0, 255)
-            if (a > 0) px[y * w + x] = (a shl 24) or rgb
-        }
-    }
-    val bmp = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
-    bmp.setPixels(px, 0, w, 0, 0, w, h)
+    val px = IntArray(f.w * f.h)
+    for (i in px.indices) if (mask[i]) px[i] = argb
+    val bmp = Bitmap.createBitmap(f.w, f.h, Bitmap.Config.ARGB_8888)
+    bmp.setPixels(px, 0, f.w, 0, 0, f.w, f.h)
     return bmp.asImageBitmap()
 }
 
-/** Desenha a máscara com transformação exata (sem arredondar para pixels), como cor ou como borracha. */
+/**
+ * Desenha a máscara com transformação exata, em píxeis nítidos (filtro "nenhum", sem suavização ao ampliar).
+ * Respeita o modo: borracha (DstOut), por trás (DstOver, o do balde), dentro (SrcAtop) ou normal.
+ */
 internal fun DrawScope.drawFillElement(s: BrushStroke, tint: Color?, useCache: Boolean) {
     val f = s.fill ?: return
     val cached = f.cache as? ImageBitmap
     val img = cached ?: fillBitmap(f, s.colorArgb).also { if (useCache) f.cache = it }
     val filter = if (tint != null) ColorFilter.tint(tint, BlendMode.SrcIn) else null
-    val blend = if (s.erase) BlendMode.DstOut else BlendMode.SrcOver
+    val blend = when {
+        s.erase -> BlendMode.DstOut
+        s.mode == 2 -> BlendMode.DstOver
+        s.mode == 1 -> BlendMode.SrcAtop
+        else -> BlendMode.SrcOver
+    }
+    val size = IntSize(img.width, img.height)
     withTransform({ translate(f.x * f.unit, f.y * f.unit); scale(f.unit, f.unit, Offset.Zero) }) {
-        drawImage(img, colorFilter = filter, blendMode = blend)
+        drawImage(
+            img, srcOffset = IntOffset.Zero, srcSize = size, dstOffset = IntOffset.Zero, dstSize = size,
+            colorFilter = filter, blendMode = blend, filterQuality = FilterQuality.None,
+        )
     }
 }
 
