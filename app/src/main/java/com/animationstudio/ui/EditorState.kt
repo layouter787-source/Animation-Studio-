@@ -50,7 +50,10 @@ internal class EditorState(initial: Project) {
     var stabilizer by mutableFloatStateOf(0.25f)
     /** Suavização do traço em percentagem (0..1), aplicada aos pontos do traço. */
     var smoothing by mutableFloatStateOf(0.4f)
-    /** 0 = normal, 1 = desenhar só dentro do que existe, 2 = desenhar por trás do que existe. */
+    /**
+     * 0 = normal, 1 = "dentro" (só pinta onde já existe tinta), 2 = "por trás" (só pinta por trás do que existe).
+     * Volta sempre a 0 ao trocar de ferramenta ou de pincel: em "dentro" o pincel não pinta numa zona apagada.
+     */
     var drawMode by mutableIntStateOf(0)
 
     var bucketGap by mutableIntStateOf(8)
@@ -103,6 +106,7 @@ internal class EditorState(initial: Project) {
             brushPresetId = p.id
             brushSize = p.defaultSize
             brushOpacity = p.defaultOpacity
+            drawMode = 0
         }
     }
 
@@ -132,6 +136,7 @@ internal class EditorState(initial: Project) {
         commitFloating()
         activePoints.clear()
         tool = t
+        drawMode = 0
     }
 
     fun commitStroke() {
