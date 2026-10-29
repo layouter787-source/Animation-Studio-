@@ -710,7 +710,7 @@ private fun grainImage(kind: GrainKind, strength: Float): ImageBitmap {
             px[i] = (a shl 24) or 0xFFFFFF
         }
         val bmp = Bitmap.createBitmap(n, n, Bitmap.Config.ARGB_8888)
-        bmp.setPixels(px, 0, n, 0, 0, n, n)
+        bmp.setPixels(px, 0, n, 0, n, n, n)
         bmp.asImageBitmap()
     }
 }
@@ -847,7 +847,7 @@ private fun fillBitmap(f: FillRegion, argb: Int): ImageBitmap {
 
 /**
  * Desenha a máscara com transformação exata, em píxeis nítidos (filtro "nenhum", sem suavização ao ampliar).
- * Respeita o modo: borracha (DstOut), por trás (DstOver, o do balde), dentro (SrcAtop) ou normal.
+ * A camada do preenchimento fica sempre por baixo da tinta (ver [drawElements]); aqui só há borracha, "dentro" ou normal.
  */
 internal fun DrawScope.drawFillElement(s: BrushStroke, tint: Color?, useCache: Boolean) {
     val f = s.fill ?: return
@@ -856,7 +856,6 @@ internal fun DrawScope.drawFillElement(s: BrushStroke, tint: Color?, useCache: B
     val filter = if (tint != null) ColorFilter.tint(tint, BlendMode.SrcIn) else null
     val blend = when {
         s.erase -> BlendMode.DstOut
-        s.mode == 2 -> BlendMode.DstOver
         s.mode == 1 -> BlendMode.SrcAtop
         else -> BlendMode.SrcOver
     }
@@ -887,7 +886,12 @@ internal fun DrawScope.drawElement(s: BrushStroke, tint: Color?, useCache: Boole
     else drawInk(s, tint, useCache)
 }
 
-/** Elementos de um desenho, pela ordem em que foram feitos. */
+/**
+ * Elementos de um desenho, pela ordem em que foram feitos.
+ * Se houver preenchimentos, desenha em dois grupos: primeiro os preenchimentos (por baixo), depois a tinta (por cima).
+ * As borrachas entram nos dois grupos, cada um pela ordem do tempo: uma borracha feita ANTES de um preenchimento
+ * não o apaga (pintar sobre uma zona apagada funciona) e uma feita DEPOIS apaga-o, como seria de esperar.
+ */
 internal fun DrawScope.drawElements(
     strokes: List<BrushStroke>,
     tint: Color?,
@@ -895,7 +899,7 @@ internal fun DrawScope.drawElements(
     selected: Set<Int>? = null,
     selTransform: ((DrawTransform) -> Unit)? = null,
 ) {
-    for (i in strokes.indices) {
+    fun one(i: Int) {
         val s = strokes[i]
         if (selected != null && selTransform != null && i in selected) {
             withTransform({ selTransform(this) }) { drawElement(s, tint, useCache) }
@@ -903,6 +907,20 @@ internal fun DrawScope.drawElements(
             drawElement(s, tint, useCache)
         }
     }
+    if (strokes.none { it.fill != null }) {
+        for (i in strokes.indices) one(i)
+        return
+    }
+    val all = Rect(-1e7f, -1e7f, 1e7f, 1e7f)
+    drawContext.canvas.saveLayer(all, Paint())
+    for (i in strokes.indices) {
+        val s = strokes[i]
+        if (s.fill != null || s.erase) one(i)
+    }
+    drawContext.canvas.restore()
+    drawContext.canvas.saveLayer(all, Paint())
+    for (i in strokes.indices) if (strokes[i].fill == null) one(i)
+    drawContext.canvas.restore()
 }
 
 /**
