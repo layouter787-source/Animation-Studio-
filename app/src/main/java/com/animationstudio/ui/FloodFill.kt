@@ -16,8 +16,10 @@ import kotlin.math.sqrt
  * Balde de tinta rápido (tempo O(pixels), independente do tamanho da fresta):
  *  - referência = o que está visível no frame, em até ~2 milhões de células (memória baixa, sem estourar a RAM);
  *  - fecho de frestas por fecho morfológico (dilatar e erodir com somas de prefixos): as frestas fecham sem engrossar as linhas;
- *  - expansão: a região entra [growPx] por baixo das linhas, sem halo nos contornos;
- *  - bolsas: cantos minúsculos entre linhas que se cruzam (triângulos brancos) juntam-se ao preenchimento.
+ *  - expansão: a região entra [growPx] POR BAIXO das linhas, mas só nos pixels de tinta reais (nunca para o outro lado);
+ *  - bolsas: cantos minúsculos entre linhas que se cruzam (triângulos brancos) juntam-se ao preenchimento;
+ *  - o preenchimento é guardado em modo "por trás" (mode = 2): a tinta das linhas fica sempre por cima e o fio
+ *    semitransparente das bordas (por exemplo, a borda de uma zona apagada) fica coberto, sem "marca".
  * Chamar fora da thread principal. Devolve null se o ponto está fora da folha ou numa linha.
  */
 internal fun computeFill(
@@ -61,6 +63,7 @@ internal fun computeFill(
     val growCells = (growPx / unit).roundToInt().coerceIn(0, 12)
     // Fecho morfológico: tapa frestas até 2×gap sem engrossar as linhas.
     val closed = if (gapCells > 0) close(barrier, w, h, gapCells) else barrier
+    // Se o toque caiu numa zona estreita que o fecho tapou, usa a referência original (sem fecho).
     val blocked = if (closed[sy * w + sx]) barrier else closed
 
     var start = sy * w + sx
@@ -96,10 +99,10 @@ internal fun computeFill(
         if (y < h - 1 && !visited[i + w] && !blocked[i + w]) { visited[i + w] = true; stack[sp++] = i + w }
     }
 
-    // Bolsas: células livres, coladas ao preenchimento, presas entre linhas e pequenas demais para serem uma área
-    // própria (os triângulos brancos nos cantos). Se a componente cresce além do limite, é outra região e fica de fora.
-    val maxPocket = max(120, w * h / 4000)
-    val near = dilate(visited, w, h, 4)
+    // Bolsas: células livres, coladas ao preenchimento, presas entre linhas e minúsculas (cantos de linhas que se
+    // cruzam). Se a componente cresce além do limite, é outra região e fica de fora.
+    val maxPocket = max(40, w * h / 20000)
+    val near = dilate(visited, w, h, 3)
     val seen = BooleanArray(w * h)
     val pocket = IntArray(maxPocket + 1)
     val pocketCells = ArrayList<Int>()
@@ -125,10 +128,11 @@ internal fun computeFill(
     }
     for (c in pocketCells) visited[c] = true
 
-    // Entra por baixo das linhas (expansão) sem passar para lá delas.
+    // Expansão por baixo da tinta: só entra em pixels de tinta reais (barrier), nunca em células livres do outro lado
+    // da linha. Assim a cor não sai do contorno e não fica fio de borda.
     val region: BooleanArray = if (growCells > 0) {
         val grown = dilate(visited, w, h, growCells)
-        BooleanArray(w * h) { visited[it] || (grown[it] && blocked[it]) }
+        BooleanArray(w * h) { visited[it] || (grown[it] && barrier[it]) }
     } else visited
 
     var minX = w
@@ -153,7 +157,8 @@ internal fun computeFill(
     for (y in 0 until bh) {
         System.arraycopy(region, (minY + y) * w + minX, reg, y * bw, bw)
     }
-    return BrushStroke(emptyList(), colorArgb, 0f, erase = false, fill = FillRegion.encode(reg, bw, bh, minX, minY, unit))
+    // mode = 2: desenhado por trás da tinta existente na camada.
+    return BrushStroke(emptyList(), colorArgb, 0f, erase = false, fill = FillRegion.encode(reg, bw, bh, minX, minY, unit), mode = 2)
 }
 
 /** Dilatação quadrada de raio [r] em O(n) (somas de prefixos por linha e por coluna). */
