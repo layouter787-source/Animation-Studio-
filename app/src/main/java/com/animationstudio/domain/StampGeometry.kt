@@ -45,6 +45,20 @@ object StampGeometry {
                     StampShape.BOLT -> out.add(Stamp(px, py, max(1f, width * preset.spacing * 1.1f * jit), ang, 1f))
                     StampShape.TWIG -> out.add(Stamp(px, py, max(1f, width * 0.8f * jit), ang + (rnd.nextFloat() - 0.5f) * 0.8f, 1f))
                     StampShape.DASH -> out.add(Stamp(px, py, max(1f, width * 0.9f * jit), ang, 1f))
+                    // Formas que seguem a direção do traço.
+                    StampShape.LINE, StampShape.ARROW, StampShape.WAVE, StampShape.ZIGZAG, StampShape.SCRATCH ->
+                        out.add(Stamp(px, py, max(1f, width * 0.9f * jit), ang + (rnd.nextFloat() - 0.5f) * 0.08f, 1f))
+                    // Formas "em pé" (árvores, plantas, chamas, gotas): ligeiramente inclinadas.
+                    StampShape.CONIFER, StampShape.ROUNDTREE, StampShape.BAMBOO, StampShape.CACTUS, StampShape.FERN,
+                    StampShape.FLAME, StampShape.DROPLET, StampShape.MOUNTAIN, StampShape.CROWN, StampShape.HEART ->
+                        out.add(Stamp(px, py, max(1f, width * 0.8f * jit), (rnd.nextFloat() - 0.5f) * 0.2f, 1f))
+                    // Formas alinhadas aos eixos (padrões e geometria).
+                    StampShape.SQUARE, StampShape.TRIANGLE, StampShape.DIAMOND, StampShape.HEXAGON, StampShape.CROSS,
+                    StampShape.RING, StampShape.BRICK, StampShape.PUFF, StampShape.BUBBLE ->
+                        out.add(Stamp(px, py, max(1f, width * 0.6f * jit), 0f, 1f))
+                    // Formas com rotação livre.
+                    StampShape.SPLAT, StampShape.FLOWER, StampShape.SPIRAL, StampShape.ROCK, StampShape.BURST, StampShape.STAR5 ->
+                        out.add(Stamp(px, py, max(1f, width * 0.55f * jit), rnd.nextFloat() * twoPi, 1f))
                     StampShape.NONE -> {}
                 }
             }
