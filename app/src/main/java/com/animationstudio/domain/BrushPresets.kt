@@ -25,15 +25,22 @@ enum class StampShape {
     DASH,
     /** Gota de chuva inclinada (ângulo fixo). */
     RAIN,
+    // ---- formas geométricas e de natureza (catálogo) ----
+    SQUARE, TRIANGLE, DIAMOND, HEXAGON, RING, HEART, CROWN, SPIRAL, ARROW, CROSS, DROPLET, SPLAT, BRICK,
+    FLOWER, CONIFER, ROUNDTREE, BAMBOO, MOUNTAIN, PUFF, WAVE, ZIGZAG, SCRATCH, BURST, LINE, CACTUS, ROCK,
+    BUBBLE, FERN, STAR5, FLAME,
 }
+
+/** Textura procedural aplicada ao traço (grão). Gerada por código, sem imagens de terceiros. */
+enum class GrainKind { PAPER, CANVAS, WOOD, STONE, CLOUD, LEATHER, SAND, GRUNGE, METAL, CONCRETE }
 
 /**
  * Predefinição de pincel ou borracha. Motores:
- *  - contínuo (por defeito): espessura, pontas afiladas ([taper]);
+ *  - contínuo (por defeito): espessura uniforme, pontas redondas;
  *  - [soft]: toques redondos suaves (aerógrafo, aguarela, brilho) com a dureza [hardness];
  *  - [lines] > 1: linhas paralelas (linha dupla, cerdas de tinta a óleo) com variação [lineJitter];
  *  - [stamp]: carimbos com [spacing], [scatter], [sizeJitter] e [density].
- * [grain] > 0 aplica a textura do papel (grão) ao traço, como num lápis real.
+ * [grain] > 0 aplica a textura [texture] (papel, tela, madeira, pedra…) ao traço, como num material real.
  */
 data class BrushPreset(
     val id: String,
@@ -54,6 +61,7 @@ data class BrushPreset(
     val soft: Boolean = false,
     val lines: Int = 1,
     val lineJitter: Float = 0f,
+    val texture: GrainKind = GrainKind.PAPER,
 )
 
 object BrushLimits {
@@ -65,27 +73,39 @@ object BrushLibrary {
     const val SKETCH = "Esboço"
     const val INK = "Tinta"
     const val LINEART = "Lineart"
+    const val COMICS = "Comics e mangá"
     const val MARKER = "Marcadores"
     const val AIR = "Aerógrafo"
     const val WATER = "Aguarela"
     const val PAINT = "Pintura"
+    const val BLOTS = "Tintas e manchas"
+    const val TEXTURES = "Texturas"
     const val SHADOW = "Sombra"
     const val HAIR = "Cabelo"
     const val LIGHT = "Luz"
+    const val COLORFX = "Luz e cor"
     const val ELECTRIC = "Raios"
     const val FX = "Efeitos"
+    const val SMOKEFIRE = "Fumaça e fogo"
+    const val LIQUIDS = "Água e líquidos"
     const val SPEED = "Velocidade"
     const val WEATHER = "Clima"
     const val PLANTS = "Plantas"
+    const val VEGETATION = "Vegetação"
     const val TREES = "Árvores"
     const val GRASSES = "Relva e capim"
+    const val ELEMENTS = "Elementos"
+    const val PATTERNS = "Padrões e fundos"
+    const val GRUNGE = "Grunge e sujeira"
+    const val ANIM = "Animação e conceito"
     const val DOTS = "Pontilhismo"
     const val MATERIALS = "Materiais"
     const val ERASERS = "Borrachas"
 
     val brushCategories = listOf(
-        SKETCH, INK, LINEART, MARKER, AIR, WATER, PAINT, SHADOW, HAIR, LIGHT, ELECTRIC, FX, SPEED, WEATHER,
-        PLANTS, TREES, GRASSES, DOTS, MATERIALS,
+        SKETCH, INK, LINEART, COMICS, MARKER, AIR, WATER, PAINT, BLOTS, TEXTURES, SHADOW, HAIR, LIGHT, COLORFX,
+        ELECTRIC, FX, SMOKEFIRE, LIQUIDS, SPEED, WEATHER, PLANTS, VEGETATION, TREES, GRASSES, ELEMENTS, PATTERNS,
+        GRUNGE, ANIM, DOTS, MATERIALS,
     )
     val eraserCategories = listOf(ERASERS)
 
@@ -111,7 +131,7 @@ object BrushLibrary {
         id: String, name: String, size: Float, op: Float, shape: StampShape, spacing: Float, scatter: Float, jit: Float, density: Int, keywords: String = "",
     ) = BrushPreset(id, name, ERASERS, BrushKind.ERASER, size, op, 0f, 1f, shape, spacing, scatter, jit, density, keywords)
 
-    val all: List<BrushPreset> = listOf(
+    private val core: List<BrushPreset> = listOf(
         // Esboço: lápis com grão de papel
         b("pencil_mech", "Lápis mecânico", SKETCH, 2.5f, 0.85f, 0.35f, grain = 0.2f, keywords = "line art rascunho fino"),
         b("pencil_h", "Lápis H", SKETCH, 3f, 0.75f, 0.4f, grain = 0.35f, keywords = "line art rascunho"),
@@ -319,6 +339,8 @@ object BrushLibrary {
         es("eraser_stipple", "Borracha pontilhada", 40f, 1f, StampShape.DOT, 0.3f, 1f, 0.6f, 3, "pontos"),
         es("eraser_splat", "Borracha salpicada", 50f, 1f, StampShape.GRAIN, 0.06f, 1f, 0.6f, 8, "partículas"),
     )
+
+    val all: List<BrushPreset> = core + BrushCatalog.presets
 
     fun byIdOrNull(id: String): BrushPreset? = all.firstOrNull { it.id == id }
     fun byId(id: String): BrushPreset = byIdOrNull(id) ?: all.first()
