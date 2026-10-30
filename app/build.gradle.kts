@@ -32,6 +32,18 @@ android {
         }
     }
 
+    signingConfigs {
+        create("release") {
+            val keystoreFile = System.getenv("ANDROID_KEYSTORE_FILE")
+            if (!keystoreFile.isNullOrBlank()) {
+                storeFile = file(keystoreFile)
+                storePassword = System.getenv("ANDROID_KEYSTORE_PASSWORD")
+                keyAlias = System.getenv("ANDROID_KEY_ALIAS")
+                keyPassword = System.getenv("ANDROID_KEY_PASSWORD")
+            }
+        }
+    }
+
     buildFeatures {
         compose = true
     }
@@ -42,8 +54,16 @@ android {
     }
     kotlinOptions {
         jvmTarget = "17"
-        // PointerInputChange.historical (traço suave com amostras intermédias) é API experimental do Compose UI.
         freeCompilerArgs += listOf("-opt-in=androidx.compose.ui.ExperimentalComposeUiApi")
+    }
+
+    buildTypes {
+        getByName("release") {
+            val keystoreFile = System.getenv("ANDROID_KEYSTORE_FILE")
+            if (!keystoreFile.isNullOrBlank()) {
+                signingConfig = signingConfigs.getByName("release")
+            }
+        }
     }
 }
 
