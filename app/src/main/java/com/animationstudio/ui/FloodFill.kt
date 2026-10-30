@@ -12,8 +12,11 @@ import kotlin.math.min
 import kotlin.math.roundToInt
 import kotlin.math.sqrt
 
-/** Acima deste alfa (0–255) um pixel conta como tinta (parede). Abaixo, é papel: inclui o fio do anti-aliasing e o resíduo de borrachas suaves. */
+/** Acima deste alfa (0–255) um pixel conta como tinta (parede). Abaixo, é papel: inclui o fio do anti-aliasing. */
 private const val INK_ALPHA = 90
+
+/** Uma fatia é "fina" se a sua espessura média (2×área/perímetro) for até isto, em células. */
+private const val SLIVER_THICKNESS = 10f
 
 /**
  * Balde de tinta rápido (tempo O(pixels), independente do tamanho da fresta):
@@ -22,7 +25,8 @@ private const val INK_ALPHA = 90
  *    só se o preenchimento "vazar" (cobrir quase a folha toda) tenta fechar frestas, cada vez maiores;
  *  - o fecho de frestas é morfológico (dilatar e erodir com somas de prefixos): não engrossa as linhas;
  *  - expansão: a região entra [growPx] POR BAIXO das linhas, mas só nos pixels de tinta reais (nunca para o outro lado);
- *  - bolsas: cantos minúsculos entre linhas que se cruzam (triângulos brancos) juntam-se ao preenchimento;
+ *  - bolsas e fatias: cantos minúsculos e tiras finas coladas ao preenchimento (a sobra onde o fim de um círculo
+ *    não coincide com o início) juntam-se ao preenchimento; áreas grandes de outras regiões ficam de fora;
  *  - o preenchimento é guardado em modo "por trás" (mode = 2): a tinta das linhas fica sempre por cima.
  * Chamar fora da thread principal. Devolve null se o ponto está fora da folha ou numa linha.
  */
@@ -109,32 +113,47 @@ internal fun computeFill(
             if (y < h - 1 && !visited[i + w] && !blocked[i + w]) { visited[i + w] = true; stack[sp++] = i + w }
         }
 
-        // Bolsas: células livres, coladas ao preenchimento, presas entre linhas e minúsculas (cantos de linhas que se
-        // cruzam). Se a componente cresce além do limite, é outra região e fica de fora.
+        // Bolsas e fatias coladas ao preenchimento: componentes livres presas entre linhas. Entram no preenchimento
+        // se forem minúsculas (cantos) ou finas (tiras de sobra). Se a componente cresce além do limite, é outra
+        // região e fica de fora.
         val maxPocket = max(40, w * h / 20000)
+        val sliverCap = max(maxPocket, w * h / 80)
         val near = dilate(visited, w, h, 3)
         val seen = BooleanArray(w * h)
-        val pocket = IntArray(maxPocket + 1)
+        val pocket = IntArray(sliverCap + 1)
         val pocketCells = ArrayList<Int>()
         for (i0 in 0 until w * h) {
             if (!near[i0] || visited[i0] || barrier[i0] || seen[i0]) continue
             var count = 0
+            var edgeCells = 0
             var overflow = false
             sp = 0
             stack[sp++] = i0
             seen[i0] = true
             while (sp > 0) {
                 val i = stack[--sp]
-                if (count < maxPocket) pocket[count] = i else overflow = true
+                if (count < sliverCap) pocket[count] = i else overflow = true
                 count++
                 val x = i % w
                 val y = i / w
-                if (x > 0 && !seen[i - 1] && !visited[i - 1] && !barrier[i - 1]) { seen[i - 1] = true; stack[sp++] = i - 1 }
-                if (x < w - 1 && !seen[i + 1] && !visited[i + 1] && !barrier[i + 1]) { seen[i + 1] = true; stack[sp++] = i + 1 }
-                if (y > 0 && !seen[i - w] && !visited[i - w] && !barrier[i - w]) { seen[i - w] = true; stack[sp++] = i - w }
-                if (y < h - 1 && !seen[i + w] && !visited[i + w] && !barrier[i + w]) { seen[i + w] = true; stack[sp++] = i + w }
+                var edge = false
+                if (x > 0) {
+                    if (barrier[i - 1] || visited[i - 1]) edge = true else if (!seen[i - 1]) { seen[i - 1] = true; stack[sp++] = i - 1 }
+                } else edge = true
+                if (x < w - 1) {
+                    if (barrier[i + 1] || visited[i + 1]) edge = true else if (!seen[i + 1]) { seen[i + 1] = true; stack[sp++] = i + 1 }
+                } else edge = true
+                if (y > 0) {
+                    if (barrier[i - w] || visited[i - w]) edge = true else if (!seen[i - w]) { seen[i - w] = true; stack[sp++] = i - w }
+                } else edge = true
+                if (y < h - 1) {
+                    if (barrier[i + w] || visited[i + w]) edge = true else if (!seen[i + w]) { seen[i + w] = true; stack[sp++] = i + w }
+                } else edge = true
+                if (edge) edgeCells++
             }
-            if (!overflow) for (k in 0 until count) pocketCells.add(pocket[k])
+            if (overflow) continue
+            val thickness = count * 2f / max(1, edgeCells)
+            if (count <= maxPocket || thickness <= SLIVER_THICKNESS) for (k in 0 until count) pocketCells.add(pocket[k])
         }
         for (c in pocketCells) visited[c] = true
 

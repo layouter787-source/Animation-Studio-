@@ -95,8 +95,9 @@ object StampGeometry {
     }
 
     /**
-     * Toques redondos e suaves ao longo do traço (aerógrafo, aguarela, brilho). [spacingFrac] é a distância entre
-     * toques como fração do diâmetro; com [taper] > 0 o tamanho diminui nas pontas.
+     * Toques redondos ao longo do traço (aerógrafo, aguarela, brilho, cerdas). [spacingFrac] é a distância entre
+     * toques como fração do diâmetro; com [taper] > 0 o tamanho diminui nas pontas. A rotação de cada toque
+     * é a direção do traço (usada pelos pincéis de cerdas).
      */
     fun dabs(points: List<Point>, width: Float, taper: Float, spacingFrac: Float): List<Stamp> {
         val out = ArrayList<Stamp>()
@@ -120,12 +121,13 @@ object StampGeometry {
             if (seg == 0f) continue
             val tx = (b.x - a.x) / seg
             val ty = (b.y - a.y) / seg
+            val ang = atan2(ty, tx)
             while (next <= travelled + seg) {
                 val d = next - travelled
                 val pos = next
                 val edge = min(pos, total - pos)
                 val factor = if (t < 0.05f || taperLen <= 0f) 1f else 1f - t * 0.9f * (1f - smooth(edge / taperLen))
-                out.add(Stamp(a.x + tx * d, a.y + ty * d, max(0.5f, width * factor), 0f, 1f))
+                out.add(Stamp(a.x + tx * d, a.y + ty * d, max(0.5f, width * factor), ang, 1f))
                 next += spacing
                 if (out.size >= MAX_STAMPS) return out
             }
