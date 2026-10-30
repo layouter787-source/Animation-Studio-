@@ -1,12 +1,37 @@
 package com.animationstudio.domain
 
-/** Traço de pincel/borracha em coordenadas do projeto (independente de zoom, pan e rotação). */
+/** Elemento de um desenho: traço de pincel/borracha, preenchimento (balde) ou imagem (seleção/importação). */
 data class BrushStroke(
     val points: List<Point>,
     val colorArgb: Int,
     val width: Float,
     val erase: Boolean = false,
-)
+    val fill: FillRegion? = null,
+    /** 0 = espessura uniforme; 1 = pontas muito afiladas. */
+    val taper: Float = 0.6f,
+    /** 1 = borda nítida; valores baixos = borda suave (aerógrafo). */
+    val hardness: Float = 1f,
+    /** Id da predefinição (estilo de carimbo/textura). Vazio = traço contínuo. */
+    val brush: String = "",
+    /** 0 = normal, 1 = só dentro do desenho existente, 2 = por trás do desenho existente. */
+    val mode: Int = 0,
+    val image: ImageData? = null,
+) {
+    /** Cache de renderização da UI. Não entra em equals/hashCode/copy. */
+    var renderCache: Any? = null
+
+    /** Aplica uma transformação. Devolve null se o preenchimento não puder ser reamostrado. */
+    fun transformed(m: Affine): BrushStroke? {
+        val im = image
+        if (im != null) return copy(image = im.transformed(m))
+        val f = fill
+        if (f != null) {
+            val nf = f.transformed(m) ?: return null
+            return copy(fill = nf)
+        }
+        return copy(points = points.map { m.map(it) }, width = width * m.scaleFactor)
+    }
+}
 
 /** Cada frame tem identidade e conteúdo próprios. */
 data class AnimFrame(val id: Long, val strokes: List<BrushStroke> = emptyList())

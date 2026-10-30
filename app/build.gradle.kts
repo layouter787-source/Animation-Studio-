@@ -42,8 +42,12 @@ android {
     }
     kotlinOptions {
         jvmTarget = "17"
-        // PointerInputChange.historical (traço suave com amostras intermédias) é API experimental do Compose UI.
-        freeCompilerArgs += listOf("-opt-in=androidx.compose.ui.ExperimentalComposeUiApi")
+        // PointerInputChange.historical (traço suave) e combinedClickable são APIs experimentais.
+        freeCompilerArgs += listOf(
+            "-opt-in=androidx.compose.ui.ExperimentalComposeUiApi",
+            "-opt-in=androidx.compose.foundation.ExperimentalFoundationApi",
+            "-opt-in=androidx.compose.material3.ExperimentalMaterial3Api",
+        )
     }
 }
 
@@ -59,4 +63,6 @@ dependencies {
     debugImplementation("androidx.compose.ui:ui-tooling")
 
     testImplementation("junit:junit:4.13.2")
+    // org.json real para testar a (des)serialização na JVM (o android.jar só tem stubs).
+    testImplementation("org.json:json:20240303")
 }
