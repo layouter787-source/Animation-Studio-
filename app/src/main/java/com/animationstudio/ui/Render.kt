@@ -31,6 +31,7 @@ import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.LayoutDirection
+import com.animationstudio.domain.BrushDynamics
 import com.animationstudio.domain.BrushKind
 import com.animationstudio.domain.BrushLibrary
 import com.animationstudio.domain.BrushPreset
@@ -60,7 +61,8 @@ import kotlin.math.sin
 
 // ---------------------------------------------------------------------------------------------
 // Traços. Motores: contínuo (espessura uniforme, pontas redondas), toques suaves (aerógrafo/aguarela),
-// linhas paralelas (cerdas), carimbos (plantas, luz, formas) e textura procedural aplicada por cima
+// cerdas (óleo, acrílico, leque: toques com padrão de cerdas rodado pela direção do traço), linhas paralelas
+// (materiais), carimbos (plantas, luz, formas) e textura procedural aplicada por cima
 // (papel, tela, madeira, pedra, nuvem, couro, areia, grunge, metal, concreto).
 // A borracha NUNCA pinta de branco: usa composição DstOut (remove a opacidade do que existe na camada).
 // ---------------------------------------------------------------------------------------------
@@ -78,9 +80,13 @@ private class InkRender(
     val lines: List<LineRender>?,
     val grain: Float,
     val grainKind: GrainKind,
+    /** Contraste das cerdas (0 = toques redondos normais). */
+    val bristle: Float = 0f,
+    val bristleVariant: Int = 0,
 )
 
 private val dabCache = ConcurrentHashMap<Int, ImageBitmap>()
+private val bristleCache = ConcurrentHashMap<Int, ImageBitmap>()
 private val grainCache = ConcurrentHashMap<Int, ImageBitmap>()
 private val textureCache = ConcurrentHashMap<GrainKind, FloatArray>()
 
@@ -512,6 +518,14 @@ private fun buildInk(s: BrushStroke): InkRender {
     if (preset != null && preset.stamp != StampShape.NONE) {
         return InkRender(emptyList(), buildStamps(s, preset), null, 0f, 0f, null, grain, gk)
     }
+    if (preset != null) {
+        // Pincéis de cerdas (óleo, acrílico, guache, leque…): toques com cerdas rodados pela direção do traço.
+        val br = BrushDynamics.bristle(preset)
+        if (br > 0f) {
+            val variant = (((seedOf(s) % 6L) + 6L) % 6L).toInt()
+            return InkRender(emptyList(), null, StampGeometry.dabs(s.points, s.width, 0f, 0.05f), 0.5f, 0.7f, null, grain, gk, br, variant)
+        }
+    }
     if (preset != null && preset.soft) {
         val spacing = 0.08f
         val flow = 1f - Math.pow(0.05, spacing.toDouble()).toFloat()
@@ -557,6 +571,43 @@ private fun dabImage(hardness: Float): ImageBitmap {
                     t * t * (3f - 2f * t)
                 }
                 px[y * n + x] = ((a * 255f).roundToInt() shl 24) or 0xFFFFFF
+            }
+        }
+        val bmp = Bitmap.createBitmap(n, n, Bitmap.Config.ARGB_8888)
+        bmp.setPixels(px, 0, n, 0, 0, n, n)
+        bmp.asImageBitmap()
+    }
+}
+
+/**
+ * Toque de pincel de cerdas: cada linha do bitmap é um fio de cerda com intensidade própria (eixo x = direção do
+ * traço). Com os toques muito juntos, as cerdas ficam contínuas ao longo do traço, como num pincel de óleo real.
+ * [amount] é o contraste entre cerdas (0 = sem cerdas); [variant] muda a disposição de um traço para outro.
+ */
+private fun bristleImage(variant: Int, amount: Float): ImageBitmap {
+    val key = variant * 100 + (amount.coerceIn(0f, 1f) * 20f).roundToInt()
+    return bristleCache.getOrPut(key) {
+        val n = 64
+        val rnd = java.util.Random(1000L + variant)
+        val raw = FloatArray(n) { rnd.nextFloat() }
+        val sm = FloatArray(n) { i -> raw[i] * 0.6f + raw[(i + 1) % n] * 0.2f + raw[(i + n - 1) % n] * 0.2f }
+        var lo = Float.MAX_VALUE
+        var hi = -Float.MAX_VALUE
+        for (v in sm) { if (v < lo) lo = v; if (v > hi) hi = v }
+        val span = max(1e-4f, hi - lo)
+        val a0 = amount.coerceIn(0f, 1f)
+        val c = (n - 1) / 2f
+        val px = IntArray(n * n)
+        for (y in 0 until n) {
+            // Intensidade deste fio: entre (1 - amount) e 1.
+            val strand = 1f - a0 * (1f - (0.15f + 0.85f * (sm[y] - lo) / span))
+            for (x in 0 until n) {
+                val d = hypot(x - c, y - c) / (n / 2f)
+                val mask = if (d >= 1f) 0f else {
+                    val t = ((1f - d) / 0.3f).coerceIn(0f, 1f)
+                    t * t * (3f - 2f * t)
+                }
+                px[y * n + x] = ((mask * strand * 255f).roundToInt().coerceIn(0, 255) shl 24) or 0xFFFFFF
             }
         }
         val bmp = Bitmap.createBitmap(n, n, Bitmap.Config.ARGB_8888)
@@ -710,7 +761,7 @@ private fun grainImage(kind: GrainKind, strength: Float): ImageBitmap {
             px[i] = (a shl 24) or 0xFFFFFF
         }
         val bmp = Bitmap.createBitmap(n, n, Bitmap.Config.ARGB_8888)
-        bmp.setPixels(px, 0, n, 0, n, n, n)
+        bmp.setPixels(px, 0, n, 0, 0, n, n)
         bmp.asImageBitmap()
     }
 }
@@ -773,12 +824,31 @@ private fun DrawScope.drawDabs(dabs: List<Stamp>, hardness: Float, flow: Float, 
     }
 }
 
+/** Toques de cerdas: o padrão de cerdas roda com a direção do traço em cada toque. */
+private fun DrawScope.drawBristleDabs(dabs: List<Stamp>, variant: Int, amount: Float, flow: Float, rgb: Color, blend: BlendMode) {
+    val img = bristleImage(variant, amount)
+    val filter = ColorFilter.tint(rgb, BlendMode.SrcIn)
+    for (d in dabs) {
+        val k = d.size / 64f
+        val deg = d.rotation * 180f / PI.toFloat()
+        withTransform({
+            translate(d.x, d.y)
+            rotate(deg, Offset.Zero)
+            translate(-d.size / 2f, -d.size / 2f)
+            scale(k, k, Offset.Zero)
+        }) {
+            drawImage(img, alpha = flow, colorFilter = filter, blendMode = blend)
+        }
+    }
+}
+
 private fun DrawScope.drawRender(r: InkRender, rgb: Color, blend: BlendMode) {
     val dabs = r.dabs
     val lines = r.lines
     val buckets = r.stampBuckets
     if (dabs != null) {
-        drawDabs(dabs, r.dabHardness, r.dabFlow, rgb, blend)
+        if (r.bristle > 0f) drawBristleDabs(dabs, r.bristleVariant, r.bristle, r.dabFlow, rgb, blend)
+        else drawDabs(dabs, r.dabHardness, r.dabFlow, rgb, blend)
     } else if (lines != null) {
         for (l in lines) strokePath(l.path, rgb.copy(alpha = l.alpha), l.width, blend)
     } else if (buckets != null) {
@@ -795,16 +865,17 @@ private fun DrawScope.drawGrain(strength: Float, kind: GrainKind, r: Rect) {
 }
 
 /**
- * Desenha um traço. A opacidade vem do alfa da cor; a borracha usa DstOut (apaga a opacidade, não pinta de branco).
- * Com opacidade < 100%, modo "dentro"/"por trás", toques suaves ou textura, as peças são desenhadas numa camada que
- * depois recebe o alfa, o modo e a textura, para não escurecer onde as peças se sobrepõem.
+ * Desenha um traço. A opacidade vem do alfa da cor; a borracha usa DstOut (apaga a opacidade, não pinta de branco)
+ * e apaga SEMPRE por completo (ignora a opacidade: a borracha só serve para apagar).
+ * Com opacidade < 100%, modo "dentro"/"por trás", toques suaves, cerdas ou textura, as peças são desenhadas numa
+ * camada que depois recebe o alfa, o modo e a textura, para não escurecer onde as peças se sobrepõem.
  */
 internal fun DrawScope.drawInk(s: BrushStroke, tint: Color?, useCache: Boolean) {
     if (s.points.isEmpty()) return
     val cached = s.renderCache as? InkRender
     val render = cached ?: buildInk(s).also { if (useCache) s.renderCache = it }
     val source = tint ?: Color(s.colorArgb)
-    val alpha = source.alpha
+    val alpha = if (s.erase) 1f else source.alpha
     val rgb = if (s.erase) Color.Black else source.copy(alpha = 1f)
     val layerBlend = when {
         s.erase -> BlendMode.DstOut
