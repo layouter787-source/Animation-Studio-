@@ -12,14 +12,18 @@ import kotlin.math.min
 import kotlin.math.roundToInt
 import kotlin.math.sqrt
 
+/** Acima deste alfa (0–255) um pixel conta como tinta (parede). Abaixo, é papel: inclui o fio do anti-aliasing e o resíduo de borrachas suaves. */
+private const val INK_ALPHA = 90
+
 /**
  * Balde de tinta rápido (tempo O(pixels), independente do tamanho da fresta):
  *  - referência = o que está visível no frame, em até ~2 milhões de células (memória baixa, sem estourar a RAM);
- *  - fecho de frestas por fecho morfológico (dilatar e erodir com somas de prefixos): as frestas fecham sem engrossar as linhas;
+ *  - tenta primeiro SEM fechar frestas (preenche tudo o que está ligado, incluindo riscos finos e zonas apagadas);
+ *    só se o preenchimento "vazar" (cobrir quase a folha toda) tenta fechar frestas, cada vez maiores;
+ *  - o fecho de frestas é morfológico (dilatar e erodir com somas de prefixos): não engrossa as linhas;
  *  - expansão: a região entra [growPx] POR BAIXO das linhas, mas só nos pixels de tinta reais (nunca para o outro lado);
  *  - bolsas: cantos minúsculos entre linhas que se cruzam (triângulos brancos) juntam-se ao preenchimento;
- *  - o preenchimento é guardado em modo "por trás" (mode = 2): a tinta das linhas fica sempre por cima e o fio
- *    semitransparente das bordas (por exemplo, a borda de uma zona apagada) fica coberto, sem "marca".
+ *  - o preenchimento é guardado em modo "por trás" (mode = 2): a tinta das linhas fica sempre por cima.
  * Chamar fora da thread principal. Devolve null se o ponto está fora da folha ou numa linha.
  */
 internal fun computeFill(
@@ -43,97 +47,124 @@ internal fun computeFill(
     val px = IntArray(w * h)
     bmp.asAndroidBitmap().getPixels(px, 0, w, 0, 0, w, h)
     val seed = px[sy * w + sx]
-    val transparentSeed = (seed ushr 24) <= 24
+    val transparentSeed = (seed ushr 24) <= INK_ALPHA
 
     val sa = seed ushr 24
     val sr = (seed shr 16) and 0xFF
     val sg = (seed shr 8) and 0xFF
     val sb = seed and 0xFF
     val barrier = BooleanArray(w * h)
+    var anyBarrier = false
     for (i in px.indices) {
         val p = px[i]
-        barrier[i] = if (transparentSeed) {
-            (p ushr 24) > 24
+        val b = if (transparentSeed) {
+            (p ushr 24) > INK_ALPHA
         } else {
             abs((p ushr 24) - sa) + abs(((p shr 16) and 0xFF) - sr) + abs(((p shr 8) and 0xFF) - sg) + abs((p and 0xFF) - sb) > 60
         }
+        barrier[i] = b
+        if (b) anyBarrier = true
     }
 
-    val gapCells = (gapPx / unit).roundToInt().coerceIn(0, 24)
     val growCells = (growPx / unit).roundToInt().coerceIn(0, 12)
-    // Fecho morfológico: tapa frestas até 2×gap sem engrossar as linhas.
-    val closed = if (gapCells > 0) close(barrier, w, h, gapCells) else barrier
-    // Se o toque caiu numa zona estreita que o fecho tapou, usa a referência original (sem fecho).
-    val blocked = if (closed[sy * w + sx]) barrier else closed
+    val total = (w * h).toFloat()
+    val stack = IntArray(w * h)
 
-    var start = sy * w + sx
-    if (blocked[start]) {
-        // O toque caiu mesmo em cima de uma linha: procura a célula livre mais próxima.
-        var found = -1
-        search@ for (r in 1..6) {
-            for (dy in -r..r) {
-                for (dx in -r..r) {
-                    val x = sx + dx
-                    val y = sy + dy
-                    if (x < 0 || y < 0 || x >= w || y >= h) continue
-                    if (!blocked[y * w + x]) { found = y * w + x; break@search }
+    /** Calcula a região com um fecho de frestas de [gapCells] células (0 = sem fecho). */
+    fun regionFor(gapCells: Int): BooleanArray? {
+        // Fecho morfológico: tapa frestas até 2×gap sem engrossar as linhas.
+        val closed = if (gapCells > 0) close(barrier, w, h, gapCells) else barrier
+        // Se o toque caiu numa zona estreita que o fecho tapou, usa a referência original (sem fecho).
+        val blocked = if (closed[sy * w + sx]) barrier else closed
+
+        var start = sy * w + sx
+        if (blocked[start]) {
+            // O toque caiu mesmo em cima de uma linha: procura a célula livre mais próxima.
+            var found = -1
+            search@ for (r in 1..6) {
+                for (dy in -r..r) {
+                    for (dx in -r..r) {
+                        val x = sx + dx
+                        val y = sy + dy
+                        if (x < 0 || y < 0 || x >= w || y >= h) continue
+                        if (!blocked[y * w + x]) { found = y * w + x; break@search }
+                    }
                 }
             }
+            if (found < 0) return null
+            start = found
         }
-        if (found < 0) return null
-        start = found
-    }
 
-    val visited = BooleanArray(w * h)
-    val stack = IntArray(w * h)
-    var sp = 0
-    stack[sp++] = start
-    visited[start] = true
-    while (sp > 0) {
-        val i = stack[--sp]
-        val x = i % w
-        val y = i / w
-        if (x > 0 && !visited[i - 1] && !blocked[i - 1]) { visited[i - 1] = true; stack[sp++] = i - 1 }
-        if (x < w - 1 && !visited[i + 1] && !blocked[i + 1]) { visited[i + 1] = true; stack[sp++] = i + 1 }
-        if (y > 0 && !visited[i - w] && !blocked[i - w]) { visited[i - w] = true; stack[sp++] = i - w }
-        if (y < h - 1 && !visited[i + w] && !blocked[i + w]) { visited[i + w] = true; stack[sp++] = i + w }
-    }
-
-    // Bolsas: células livres, coladas ao preenchimento, presas entre linhas e minúsculas (cantos de linhas que se
-    // cruzam). Se a componente cresce além do limite, é outra região e fica de fora.
-    val maxPocket = max(40, w * h / 20000)
-    val near = dilate(visited, w, h, 3)
-    val seen = BooleanArray(w * h)
-    val pocket = IntArray(maxPocket + 1)
-    val pocketCells = ArrayList<Int>()
-    for (i0 in 0 until w * h) {
-        if (!near[i0] || visited[i0] || barrier[i0] || seen[i0]) continue
-        var count = 0
-        var overflow = false
-        sp = 0
-        stack[sp++] = i0
-        seen[i0] = true
+        val visited = BooleanArray(w * h)
+        var sp = 0
+        stack[sp++] = start
+        visited[start] = true
         while (sp > 0) {
             val i = stack[--sp]
-            if (count < maxPocket) pocket[count] = i else overflow = true
-            count++
             val x = i % w
             val y = i / w
-            if (x > 0 && !seen[i - 1] && !visited[i - 1] && !barrier[i - 1]) { seen[i - 1] = true; stack[sp++] = i - 1 }
-            if (x < w - 1 && !seen[i + 1] && !visited[i + 1] && !barrier[i + 1]) { seen[i + 1] = true; stack[sp++] = i + 1 }
-            if (y > 0 && !seen[i - w] && !visited[i - w] && !barrier[i - w]) { seen[i - w] = true; stack[sp++] = i - w }
-            if (y < h - 1 && !seen[i + w] && !visited[i + w] && !barrier[i + w]) { seen[i + w] = true; stack[sp++] = i + w }
+            if (x > 0 && !visited[i - 1] && !blocked[i - 1]) { visited[i - 1] = true; stack[sp++] = i - 1 }
+            if (x < w - 1 && !visited[i + 1] && !blocked[i + 1]) { visited[i + 1] = true; stack[sp++] = i + 1 }
+            if (y > 0 && !visited[i - w] && !blocked[i - w]) { visited[i - w] = true; stack[sp++] = i - w }
+            if (y < h - 1 && !visited[i + w] && !blocked[i + w]) { visited[i + w] = true; stack[sp++] = i + w }
         }
-        if (!overflow) for (k in 0 until count) pocketCells.add(pocket[k])
-    }
-    for (c in pocketCells) visited[c] = true
 
-    // Expansão por baixo da tinta: só entra em pixels de tinta reais (barrier), nunca em células livres do outro lado
-    // da linha. Assim a cor não sai do contorno e não fica fio de borda.
-    val region: BooleanArray = if (growCells > 0) {
-        val grown = dilate(visited, w, h, growCells)
-        BooleanArray(w * h) { visited[it] || (grown[it] && barrier[it]) }
-    } else visited
+        // Bolsas: células livres, coladas ao preenchimento, presas entre linhas e minúsculas (cantos de linhas que se
+        // cruzam). Se a componente cresce além do limite, é outra região e fica de fora.
+        val maxPocket = max(40, w * h / 20000)
+        val near = dilate(visited, w, h, 3)
+        val seen = BooleanArray(w * h)
+        val pocket = IntArray(maxPocket + 1)
+        val pocketCells = ArrayList<Int>()
+        for (i0 in 0 until w * h) {
+            if (!near[i0] || visited[i0] || barrier[i0] || seen[i0]) continue
+            var count = 0
+            var overflow = false
+            sp = 0
+            stack[sp++] = i0
+            seen[i0] = true
+            while (sp > 0) {
+                val i = stack[--sp]
+                if (count < maxPocket) pocket[count] = i else overflow = true
+                count++
+                val x = i % w
+                val y = i / w
+                if (x > 0 && !seen[i - 1] && !visited[i - 1] && !barrier[i - 1]) { seen[i - 1] = true; stack[sp++] = i - 1 }
+                if (x < w - 1 && !seen[i + 1] && !visited[i + 1] && !barrier[i + 1]) { seen[i + 1] = true; stack[sp++] = i + 1 }
+                if (y > 0 && !seen[i - w] && !visited[i - w] && !barrier[i - w]) { seen[i - w] = true; stack[sp++] = i - w }
+                if (y < h - 1 && !seen[i + w] && !visited[i + w] && !barrier[i + w]) { seen[i + w] = true; stack[sp++] = i + w }
+            }
+            if (!overflow) for (k in 0 until count) pocketCells.add(pocket[k])
+        }
+        for (c in pocketCells) visited[c] = true
+
+        // Expansão por baixo da tinta: só entra em pixels de tinta reais (barrier), nunca em células livres do outro lado
+        // da linha. Assim a cor não sai do contorno e não fica fio de borda.
+        return if (growCells > 0) {
+            val grown = dilate(visited, w, h, growCells)
+            BooleanArray(w * h) { visited[it] || (grown[it] && barrier[it]) }
+        } else visited
+    }
+
+    fun coverage(r: BooleanArray): Float {
+        var n = 0
+        for (v in r) if (v) n++
+        return n / total
+    }
+
+    // Frestas a tentar, da mais pequena para a maior. Sem fecho primeiro: preenche tudo o que está ligado.
+    val userGap = (gapPx / unit).roundToInt().coerceIn(0, 24)
+    val gaps = listOf(0, userGap, max(userGap * 2, 12), 24).map { it.coerceIn(0, 24) }.distinct().sorted()
+    var region: BooleanArray? = null
+    var firstTry: BooleanArray? = null
+    for (g in gaps) {
+        val r = regionFor(g) ?: return null
+        if (firstTry == null) firstTry = r
+        // Sem nenhuma linha na folha, preencher tudo é o pretendido; caso contrário, cobrir quase tudo é um vazamento.
+        if (!anyBarrier || coverage(r) < 0.85f) { region = r; break }
+    }
+    // Se nenhum fecho conseguiu conter o preenchimento, fica com a versão exata (sem fecho).
+    val finalRegion = region ?: firstTry ?: return null
 
     var minX = w
     var minY = h
@@ -142,7 +173,7 @@ internal fun computeFill(
     for (y in 0 until h) {
         val row = y * w
         for (x in 0 until w) {
-            if (region[row + x]) {
+            if (finalRegion[row + x]) {
                 if (x < minX) minX = x
                 if (x > maxX) maxX = x
                 if (y < minY) minY = y
@@ -155,7 +186,7 @@ internal fun computeFill(
     val bh = maxY - minY + 1
     val reg = BooleanArray(bw * bh)
     for (y in 0 until bh) {
-        System.arraycopy(region, (minY + y) * w + minX, reg, y * bw, bw)
+        System.arraycopy(finalRegion, (minY + y) * w + minX, reg, y * bw, bw)
     }
     // mode = 2: desenhado por trás da tinta existente na camada.
     return BrushStroke(emptyList(), colorArgb, 0f, erase = false, fill = FillRegion.encode(reg, bw, bh, minX, minY, unit), mode = 2)
