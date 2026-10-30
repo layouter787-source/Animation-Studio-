@@ -1,0 +1,17 @@
+name: Android Release
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    uses: layouter787-source/android-release-workflow/.github/workflows/android-release.yml@main
+    secrets: inherit
