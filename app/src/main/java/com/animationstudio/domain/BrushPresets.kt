@@ -38,7 +38,8 @@ enum class GrainKind { PAPER, CANVAS, WOOD, STONE, CLOUD, LEATHER, SAND, GRUNGE,
  * Predefinição de pincel ou borracha. Motores:
  *  - contínuo (por defeito): espessura uniforme, pontas redondas;
  *  - [soft]: toques redondos suaves (aerógrafo, aguarela, brilho) com a dureza [hardness];
- *  - [lines] > 1: linhas paralelas (linha dupla, cerdas de tinta a óleo) com variação [lineJitter];
+ *  - cerdas (ver [BrushDynamics]): toques com padrão de cerdas (óleo, acrílico, leque);
+ *  - [lines] > 1: linhas paralelas (só borrachas de cerdas);
  *  - [stamp]: carimbos com [spacing], [scatter], [sizeJitter] e [density].
  * [grain] > 0 aplica a textura [texture] (papel, tela, madeira, pedra…) ao traço, como num material real.
  */
@@ -99,13 +100,12 @@ object BrushLibrary {
     const val GRUNGE = "Grunge e sujeira"
     const val ANIM = "Animação e conceito"
     const val DOTS = "Pontilhismo"
-    const val MATERIALS = "Materiais"
     const val ERASERS = "Borrachas"
 
     val brushCategories = listOf(
         SKETCH, INK, LINEART, COMICS, MARKER, AIR, WATER, PAINT, BLOTS, TEXTURES, SHADOW, HAIR, LIGHT, COLORFX,
         ELECTRIC, FX, SMOKEFIRE, LIQUIDS, SPEED, WEATHER, PLANTS, VEGETATION, TREES, GRASSES, ELEMENTS, PATTERNS,
-        GRUNGE, ANIM, DOTS, MATERIALS,
+        GRUNGE, ANIM, DOTS,
     )
     val eraserCategories = listOf(ERASERS)
 
@@ -160,7 +160,6 @@ object BrushLibrary {
         b("conte", "Conté", SKETCH, 12f, 0.85f, 0.2f, grain = 0.7f, keywords = "seco"),
         b("charcoal_vine", "Carvão de vinha", SKETCH, 10f, 0.65f, 0.2f, grain = 0.85f, keywords = "leve"),
         b("charcoal_comp", "Carvão prensado", SKETCH, 20f, 0.95f, 0.1f, grain = 0.6f, keywords = "escuro"),
-        b("sketch_hatch", "Sombreado de linhas", SKETCH, 30f, 0.75f, 0f, grain = 0.4f, lines = 6, jitter = 0.35f, keywords = "hachura"),
         // Tinta
         b("ink_fine", "Caneta fina", INK, 2.5f, 1f, 0.95f, keywords = "line art"),
         b("ink_g", "G-pen", INK, 6f, 1f, 0.8f, keywords = "line art manga"),
@@ -210,7 +209,7 @@ object BrushLibrary {
         b("wc_wet", "Aguarela molhada", WATER, 60f, 0.35f, 0.2f, 0.1f, grain = 0.3f, soft = true, keywords = "aquarela água"),
         b("wc_wash", "Aguada", WATER, 90f, 0.25f, 0f, 0f, grain = 0.2f, soft = true, keywords = "aquarela fundo"),
         s("wc_splatter", "Salpicos de aguarela", WATER, 50f, 0.6f, StampShape.DOT, 1f, 1.6f, 0.9f, 5, "respingos aquarela"),
-        // Pintura: cerdas
+        // Pintura: cerdas (ver BrushDynamics)
         b("oil", "Óleo", PAINT, 50f, 1f, 0.3f, lines = 9, jitter = 0.5f, keywords = "cerdas tinta"),
         b("acrylic", "Acrílico", PAINT, 40f, 1f, 0.2f, grain = 0.3f, lines = 7, jitter = 0.4f, keywords = "cerdas tinta"),
         b("impress", "Impressionismo", PAINT, 50f, 0.9f, 0.2f, grain = 0.2f, lines = 5, jitter = 0.6f, keywords = "cerdas"),
@@ -224,8 +223,6 @@ object BrushLibrary {
         b("sh_soft", "Sombra suave", SHADOW, 70f, 0.35f, 0f, 0.05f, soft = true, keywords = "sombreado"),
         b("sh_cel", "Sombra cel", SHADOW, 40f, 0.5f, 0f, keywords = "animação plana"),
         b("sh_gradient", "Degradê de sombra", SHADOW, 120f, 0.25f, 0f, 0f, soft = true, keywords = "gradiente"),
-        b("sh_hatch", "Hachura", SHADOW, 36f, 0.7f, 0f, grain = 0.2f, lines = 7, jitter = 0.25f, keywords = "linhas sombreado"),
-        b("sh_cross", "Hachura densa", SHADOW, 28f, 0.75f, 0f, grain = 0.2f, lines = 4, jitter = 0.3f, keywords = "linhas sombreado"),
         s("sh_stipple", "Pontilhado de sombra", SHADOW, 40f, 0.8f, StampShape.DOT, 0.25f, 1.1f, 0.7f, 3, "pontos sombreado"),
         s("sh_halftone", "Retícula", SHADOW, 36f, 0.8f, StampShape.DOT, 0.5f, 0f, 0f, 1, "halftone manga trama"),
         b("sh_ao", "Oclusão ambiente", SHADOW, 90f, 0.22f, 0f, 0f, soft = true, keywords = "contacto"),
@@ -248,7 +245,6 @@ object BrushLibrary {
         s("light_lens", "Reflexo de lente", LIGHT, 40f, 0.5f, StampShape.DOT, 1.5f, 0.2f, 0.8f, 1, "lens flare"),
         s("light_bokeh", "Bokeh", LIGHT, 60f, 0.5f, StampShape.DOT, 0.8f, 1.4f, 0.8f, 2, "luzes desfocadas"),
         b("light_rim", "Luz de contorno", LIGHT, 14f, 0.6f, 0f, 0.5f, soft = true, keywords = "rim"),
-        b("light_beam", "Feixe de luz", LIGHT, 80f, 0.3f, 0f, 0f, lines = 7, jitter = 0.5f, keywords = "raios divinos"),
         b("light_halo", "Halo", LIGHT, 100f, 0.35f, 0f, 0f, soft = true),
         s("fireflies", "Pirilampos", LIGHT, 20f, 0.9f, StampShape.DOT, 1f, 1.6f, 0.5f, 1, "luzes noite"),
         // Raios
@@ -273,8 +269,6 @@ object BrushLibrary {
         // Velocidade
         s("speed_lines", "Linhas de velocidade", SPEED, 120f, 0.9f, StampShape.STREAK, 0.08f, 1f, 0.5f, 2, "manga ação"),
         s("speed_focus", "Linhas de foco", SPEED, 200f, 0.9f, StampShape.STREAK, 0.15f, 1.3f, 0.6f, 1, "manga ação impacto"),
-        b("speed_blur", "Desfocagem de movimento", SPEED, 60f, 0.5f, 0f, lines = 9, jitter = 0.8f, keywords = "motion blur"),
-        b("speed_whoosh", "Rasto de vento", SPEED, 40f, 0.55f, 0f, lines = 5, jitter = 0.5f, keywords = "vento"),
         s("speed_dash", "Rasto tracejado", SPEED, 30f, 0.9f, StampShape.DASH, 1.6f, 0.3f, 0.2f, 1, "movimento"),
         s("speed_impact", "Impacto", SPEED, 90f, 1f, StampShape.STREAK, 0.6f, 2f, 0.4f, 3, "explosão ação"),
         s("speed_dust", "Pó de corrida", SPEED, 40f, 0.6f, StampShape.DOT, 0.4f, 1.2f, 0.8f, 3, "nuvem"),
@@ -285,7 +279,6 @@ object BrushLibrary {
         s("w_snow", "Neve", WEATHER, 26f, 1f, StampShape.FLAKE, 0.6f, 1.4f, 0.6f, 2, "inverno flocos"),
         s("w_snow_soft", "Neve leve", WEATHER, 30f, 0.9f, StampShape.DOT, 0.5f, 1.5f, 0.8f, 2, "inverno"),
         b("w_fog", "Nevoeiro", WEATHER, 140f, 0.25f, 0f, 0f, grain = 0.3f, soft = true, keywords = "névoa"),
-        b("w_wind", "Vento", WEATHER, 50f, 0.6f, 0f, lines = 4, jitter = 0.6f),
         // Plantas
         BrushPreset("grass", "Relva", PLANTS, BrushKind.BRUSH, 60f, 1f, 0f, 1f, StampShape.GRASS, 0.15f, 0.5f, 0.5f, 2, "erva árvore paisagem"),
         BrushPreset("leaves", "Folhas", PLANTS, BrushKind.BRUSH, 40f, 1f, 0f, 1f, StampShape.LEAF, 0.8f, 0.8f, 0.5f, 1, "árvore paisagem"),
@@ -319,11 +312,6 @@ object BrushLibrary {
         BrushPreset("dots", "Pontos", DOTS, BrushKind.BRUSH, 30f, 1f, 0f, 1f, StampShape.DOT, 0.6f, 0.9f, 0.6f, 2),
         BrushPreset("dots_fine", "Pontos finos", DOTS, BrushKind.BRUSH, 12f, 1f, 0f, 1f, StampShape.DOT, 0.4f, 0.9f, 0.5f, 2),
         s("dots_dense", "Pontos densos", DOTS, 20f, 1f, StampShape.DOT, 0.2f, 0.9f, 0.6f, 4, "pontilhismo"),
-        // Materiais: linhas paralelas
-        b("line_double", "Linha dupla", MATERIALS, 12f, 1f, 0f, lines = 2, keywords = "paralelas contorno"),
-        b("line_triple", "Linha tripla", MATERIALS, 14f, 1f, 0f, lines = 3, keywords = "paralelas"),
-        b("line_five", "Cinco linhas", MATERIALS, 20f, 1f, 0f, lines = 5, keywords = "paralelas"),
-        b("line_multi", "Linha múltipla", MATERIALS, 40f, 1f, 0f, lines = 8, jitter = 0.3f, keywords = "paralelas sombreamento"),
         // Borrachas: apagam o traço (transparência real), não pintam de branco
         BrushPreset("eraser_hard", "Borracha dura", ERASERS, BrushKind.ERASER, 24f, 1f, 0f, 1f),
         BrushPreset("eraser_soft", "Borracha suave", ERASERS, BrushKind.ERASER, 48f, 0.8f, 0f, 0.25f, soft = true),
@@ -340,7 +328,14 @@ object BrushLibrary {
         es("eraser_splat", "Borracha salpicada", 50f, 1f, StampShape.GRAIN, 0.06f, 1f, 0.6f, 8, "partículas"),
     )
 
-    val all: List<BrushPreset> = core + BrushCatalog.presets
+    /**
+     * Biblioteca final. Os pincéis feitos de listras paralelas (linha múltipla, hachuras, rasto de vento…) foram
+     * retirados: um pincel só fica se tiver um comportamento real. Os de cerdas (óleo, acrílico…) já usam o motor de
+     * cerdas ([BrushDynamics]); só as borrachas podem ser de linhas paralelas.
+     */
+    val all: List<BrushPreset> = (core + BrushCatalog.presets).filterNot {
+        it.kind == BrushKind.BRUSH && it.lines > 1 && BrushDynamics.bristle(it) == 0f
+    }
 
     fun byIdOrNull(id: String): BrushPreset? = all.firstOrNull { it.id == id }
     fun byId(id: String): BrushPreset = byIdOrNull(id) ?: all.first()
