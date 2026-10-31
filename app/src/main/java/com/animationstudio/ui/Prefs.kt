@@ -2,13 +2,14 @@ package com.animationstudio.ui
 
 import android.content.Context
 
-/** Preferências do estúdio (SharedPreferences): caneta, rejeição de palma, posição das barras, estabilizador, suavização, pontas e pixelização. */
+/** Preferências do estúdio (SharedPreferences): caneta, rejeição de palma, posição das barras, estabilizador, suavização, pontas, pixelização e tinta do balde. */
 internal class Prefs(context: Context) {
     private val sp = context.getSharedPreferences("studio", Context.MODE_PRIVATE)
 
     init {
         StudioRender.taperEnds = sp.getBoolean("taperEnds", false)
         StudioRender.pixelated = sp.getBoolean("pixelated", false)
+        StudioRender.inkPercent = sp.getInt("inkPercent", 35).coerceIn(0, 100)
     }
 
     var penOnly: Boolean
@@ -45,4 +46,9 @@ internal class Prefs(context: Context) {
     var pixelated: Boolean
         get() = sp.getBoolean("pixelated", false)
         set(v) { sp.edit().putBoolean("pixelated", v).apply(); StudioRender.pixelated = v }
+
+    /** Opacidade (0–100%) a partir da qual o balde trata um pixel como tinta. */
+    var inkPercent: Int
+        get() = sp.getInt("inkPercent", 35).coerceIn(0, 100)
+        set(v) { val c = v.coerceIn(0, 100); sp.edit().putInt("inkPercent", c).apply(); StudioRender.inkPercent = c }
 }

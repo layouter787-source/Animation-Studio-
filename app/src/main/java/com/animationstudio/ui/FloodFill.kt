@@ -12,15 +12,13 @@ import kotlin.math.min
 import kotlin.math.roundToInt
 import kotlin.math.sqrt
 
-/** Acima deste alfa (0–255) um pixel conta como tinta (parede). Abaixo, é papel: inclui o fio do anti-aliasing. */
-private const val INK_ALPHA = 90
-
 /** Uma fatia é "fina" se a sua espessura média (2×área/perímetro) for até isto, em células. */
 private const val SLIVER_THICKNESS = 10f
 
 /**
  * Balde de tinta rápido (tempo O(pixels), independente do tamanho da fresta):
  *  - referência = o que está visível no frame, em até ~2 milhões de células (memória baixa, sem estourar a RAM);
+ *  - um pixel conta como tinta a partir da opacidade escolhida pelo utilizador ([StudioRender.inkPercent]);
  *  - tenta primeiro SEM fechar frestas (preenche tudo o que está ligado, incluindo riscos finos e zonas apagadas);
  *    só se o preenchimento "vazar" (cobrir quase a folha toda) tenta fechar frestas, cada vez maiores;
  *  - o fecho de frestas é morfológico (dilatar e erodir com somas de prefixos): não engrossa as linhas;
@@ -50,8 +48,10 @@ internal fun computeFill(
     val bmp = renderComposite(project, project.currentFrame, sw, sh, w, h, background = null, useCache = false)
     val px = IntArray(w * h)
     bmp.asAndroidBitmap().getPixels(px, 0, w, 0, 0, w, h)
+    // Limiar de tinta escolhido pelo utilizador: 35% => alfa 89. Com 0% qualquer vestígio conta como tinta.
+    val inkAlpha = (StudioRender.inkPercent.coerceIn(0, 100) * 255 / 100)
     val seed = px[sy * w + sx]
-    val transparentSeed = (seed ushr 24) <= INK_ALPHA
+    val transparentSeed = (seed ushr 24) <= inkAlpha
 
     val sa = seed ushr 24
     val sr = (seed shr 16) and 0xFF
@@ -62,7 +62,7 @@ internal fun computeFill(
     for (i in px.indices) {
         val p = px[i]
         val b = if (transparentSeed) {
-            (p ushr 24) > INK_ALPHA
+            (p ushr 24) > inkAlpha
         } else {
             abs((p ushr 24) - sa) + abs(((p shr 16) and 0xFF) - sr) + abs(((p shr 8) and 0xFF) - sg) + abs((p and 0xFF) - sb) > 60
         }
