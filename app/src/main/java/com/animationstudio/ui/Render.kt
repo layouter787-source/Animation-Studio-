@@ -865,8 +865,8 @@ private fun DrawScope.drawGrain(strength: Float, kind: GrainKind, r: Rect) {
 }
 
 /**
- * Desenha um traço. A opacidade vem do alfa da cor; a borracha usa DstOut (apaga a opacidade, não pinta de branco)
- * e apaga SEMPRE por completo (ignora a opacidade: a borracha só serve para apagar).
+ * Desenha um traço. A opacidade vem do alfa da cor (a da borracha também: a borracha pode apagar só em parte);
+ * a borracha usa DstOut (apaga a opacidade, não pinta de branco).
  * Com opacidade < 100%, modo "dentro"/"por trás", toques suaves, cerdas ou textura, as peças são desenhadas numa
  * camada que depois recebe o alfa, o modo e a textura, para não escurecer onde as peças se sobrepõem.
  */
@@ -875,7 +875,7 @@ internal fun DrawScope.drawInk(s: BrushStroke, tint: Color?, useCache: Boolean) 
     val cached = s.renderCache as? InkRender
     val render = cached ?: buildInk(s).also { if (useCache) s.renderCache = it }
     val source = tint ?: Color(s.colorArgb)
-    val alpha = if (s.erase) 1f else source.alpha
+    val alpha = source.alpha
     val rgb = if (s.erase) Color.Black else source.copy(alpha = 1f)
     val layerBlend = when {
         s.erase -> BlendMode.DstOut
