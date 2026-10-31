@@ -36,6 +36,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -266,11 +267,21 @@ internal fun FrameActionsDialog(
     }
 }
 
+/**
+ * Definições do balde: fechar frestas, expandir por baixo da linha e a percentagem a partir da qual um pixel conta
+ * como tinta. Esta última é livre (0–100%), com slider ou valor escrito: guarda-se nas preferências.
+ */
 @Composable
 internal fun BucketDialog(gap: Int, grow: Int, onChange: (Int, Int) -> Unit, onDismiss: () -> Unit) {
+    val prefs = Prefs(LocalContext.current)
     var g by remember { mutableFloatStateOf(gap.toFloat()) }
     var e by remember { mutableFloatStateOf(grow.toFloat()) }
-    StudioDialog("Balde de tinta", onDismiss, "OK", { onChange(g.roundToInt(), e.roundToInt()) }) {
+    var ink by remember { mutableFloatStateOf(StudioRender.inkPercent.toFloat()) }
+    var inkText by remember { mutableStateOf(StudioRender.inkPercent.toString()) }
+    StudioDialog("Balde de tinta", onDismiss, "OK", {
+        prefs.inkPercent = ink.roundToInt()
+        onChange(g.roundToInt(), e.roundToInt())
+    }) {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
             Text("FECHAR FRESTAS", style = StudioType.Caption)
             Text("${g.roundToInt()} px", style = StudioType.Number)
@@ -281,6 +292,28 @@ internal fun BucketDialog(gap: Int, grow: Int, onChange: (Int, Int) -> Unit, onD
             Text("${e.roundToInt()} px", style = StudioType.Number)
         }
         Slider(value = e, onValueChange = { e = it }, valueRange = 0f..6f, colors = SliderColors)
-        Text("Frestas maiores que o valor escolhido deixam a tinta escapar.", style = StudioType.Caption.copy(fontSize = 8.sp))
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
+            Text("TINTA A PARTIR DE (%)", style = StudioType.Caption)
+            OutlinedTextField(
+                inkText,
+                {
+                    val digits = it.filter { c -> c.isDigit() }.take(3)
+                    inkText = digits
+                    val n = digits.toIntOrNull()
+                    if (n != null) ink = n.coerceIn(0, 100).toFloat()
+                },
+                singleLine = true,
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                modifier = Modifier.width(84.dp),
+            )
+        }
+        Slider(
+            value = ink, onValueChange = { ink = it; inkText = it.roundToInt().toString() },
+            valueRange = 0f..100f, colors = SliderColors,
+        )
+        Text(
+            "Frestas maiores que o valor escolhido deixam a tinta escapar. Pixels com menos opacidade do que a percentagem da tinta contam como papel e são pintados.",
+            style = StudioType.Caption.copy(fontSize = 8.sp),
+        )
     }
 }
