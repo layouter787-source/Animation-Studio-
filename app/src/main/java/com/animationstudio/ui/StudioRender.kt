@@ -11,4 +11,13 @@ internal object StudioRender {
     @Volatile var taperEnds: Boolean = false
     @Volatile var pixelated: Boolean = false
     @Volatile var inkPercent: Int = 35
+
+    private var warmed = false
+
+    /** Gera as texturas em segundo plano, uma só vez por arranque da app. */
+    @Synchronized fun warmUp() {
+        if (warmed) return
+        warmed = true
+        warmUpTextures()
+    }
 }

@@ -10,6 +10,8 @@ internal class Prefs(context: Context) {
         StudioRender.taperEnds = sp.getBoolean("taperEnds", false)
         StudioRender.pixelated = sp.getBoolean("pixelated", false)
         StudioRender.inkPercent = sp.getInt("inkPercent", 35).coerceIn(0, 100)
+        // Gera as texturas dos pincéis fora da thread principal, para o primeiro traço com textura não travar.
+        StudioRender.warmUp()
     }
 
     var penOnly: Boolean

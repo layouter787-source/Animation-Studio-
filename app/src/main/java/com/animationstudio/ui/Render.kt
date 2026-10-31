@@ -26,6 +26,7 @@ import androidx.compose.ui.graphics.drawscope.DrawTransform
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.clipRect
 import androidx.compose.ui.graphics.drawscope.withTransform
+import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.IntOffset
@@ -40,6 +41,7 @@ import com.animationstudio.domain.FillRegion
 import com.animationstudio.domain.GrainKind
 import com.animationstudio.domain.ImageData
 import com.animationstudio.domain.LayerKind
+import com.animationstudio.domain.Nature
 import com.animationstudio.domain.Point
 import com.animationstudio.domain.Project
 import com.animationstudio.domain.Stamp
@@ -62,7 +64,8 @@ import kotlin.math.sin
 // ---------------------------------------------------------------------------------------------
 // Traços. Motores: contínuo (espessura uniforme, pontas redondas), toques suaves (aerógrafo/aguarela),
 // cerdas (óleo, acrílico, leque: toques com padrão de cerdas rodado pela direção do traço), linhas paralelas
-// (materiais), carimbos (plantas, luz, formas) e textura procedural aplicada por cima
+// (borrachas de cerdas), carimbos (plantas, luz, formas), pincéis da natureza com cores próprias (tronco
+// castanho, galhos, tons da relva) e textura procedural aplicada por cima
 // (papel, tela, madeira, pedra, nuvem, couro, areia, grunge, metal, concreto).
 // A borracha NUNCA pinta de branco: usa composição DstOut (remove a opacidade do que existe na camada).
 // ---------------------------------------------------------------------------------------------
@@ -70,6 +73,9 @@ import kotlin.math.sin
 private class InkPass(val width: Float, val alpha: Float, val body: Path?, val polys: List<Path>, val tips: List<Pair<Offset, Float>>)
 
 private class LineRender(val path: Path, val width: Float, val alpha: Float)
+
+/** Grupo de carimbos com a mesma cor: [fixed] (castanho do tronco) ou a cor do utilizador com o tom [shade]. */
+private class TintBucket(val path: Path, val alpha: Float, val shade: Float, val fixed: Color?)
 
 private class InkRender(
     val passes: List<InkPass>,
@@ -83,6 +89,8 @@ private class InkRender(
     /** Contraste das cerdas (0 = toques redondos normais). */
     val bristle: Float = 0f,
     val bristleVariant: Int = 0,
+    /** Carimbos da natureza com várias cores (árvore, galho, relva). */
+    val tinted: List<TintBucket>? = null,
 )
 
 private val dabCache = ConcurrentHashMap<Int, ImageBitmap>()
@@ -92,6 +100,20 @@ private val textureCache = ConcurrentHashMap<GrainKind, FloatArray>()
 
 /** A borracha é um pouco maior que o traço: come o fio de anti-aliasing que ficava como "marca" da área apagada. */
 private const val ERASER_BLEED = 1f
+
+private val BrownA = Color(0xFF6B4A2B)
+private val BrownB = Color(0xFF553820)
+private val BarkDark = Color(0xFF3A2414)
+
+/**
+ * Gera todas as texturas de papel/pedra/madeira… em segundo plano. Chamado ao arrancar a app, para que o primeiro
+ * traço com textura não bloqueie o ecrã (a geração das texturas celulares demora algumas centenas de ms).
+ */
+internal fun warmUpTextures() {
+    Thread {
+        for (k in GrainKind.values()) textureData(k)
+    }.apply { isDaemon = true; name = "texture-warmup" }.start()
+}
 
 private fun polyPath(poly: List<Point>): Path {
     val p = Path()
@@ -135,7 +157,11 @@ private fun buildPass(s: BrushStroke, width: Float, alpha: Float): InkPass {
     return InkPass(width, alpha, body, polys, tips)
 }
 
-private fun addStamp(path: Path, shape: StampShape, st: Stamp) {
+/**
+ * Desenha um carimbo no caminho [path]. Nas árvores (CONIFER, ROUNDTREE) a copa vai para [path], o tronco para
+ * [trunk] e as rugas do tronco para [bark], para poderem ter cores diferentes.
+ */
+private fun addStamp(path: Path, shape: StampShape, st: Stamp, trunk: Path? = null, bark: Path? = null) {
     val c = cos(st.rotation)
     val sn = sin(st.rotation)
     fun wx(lx: Float, ly: Float) = st.x + lx * c - ly * sn
@@ -143,15 +169,17 @@ private fun addStamp(path: Path, shape: StampShape, st: Stamp) {
     val r = st.size / 2f
     val twoPi = 2f * PI.toFloat()
 
-    /** Polígono fechado a partir de pares x,y locais. */
-    fun poly(vararg v: Float) {
+    /** Polígono fechado em [target] a partir de pares x,y locais. */
+    fun polyOn(target: Path, vararg v: Float) {
         var i = 0
         while (i + 1 < v.size) {
-            if (i == 0) path.moveTo(wx(v[0], v[1]), wy(v[0], v[1])) else path.lineTo(wx(v[i], v[i + 1]), wy(v[i], v[i + 1]))
+            if (i == 0) target.moveTo(wx(v[0], v[1]), wy(v[0], v[1])) else target.lineTo(wx(v[i], v[i + 1]), wy(v[i], v[i + 1]))
             i += 2
         }
-        path.close()
+        target.close()
     }
+
+    fun poly(vararg v: Float) = polyOn(path, *v)
 
     /** Disco em coordenadas locais. */
     fun disc(cx: Float, cy: Float, rad: Float) {
@@ -395,13 +423,21 @@ private fun addStamp(path: Path, shape: StampShape, st: Stamp) {
             poly(0f, -r, r * 0.6f, -r * 0.2f, -r * 0.6f, -r * 0.2f)
             poly(0f, -r * 0.5f, r * 0.8f, r * 0.4f, -r * 0.8f, r * 0.4f)
             poly(0f, r * 0.1f, r, r * 0.9f, -r, r * 0.9f)
-            poly(-r * 0.12f, r * 0.9f, r * 0.12f, r * 0.9f, r * 0.12f, r * 1.1f, -r * 0.12f, r * 1.1f)
+            polyOn(trunk ?: path, -r * 0.12f, r * 0.9f, r * 0.12f, r * 0.9f, r * 0.12f, r * 1.1f, -r * 0.12f, r * 1.1f)
+            if (bark != null) {
+                polyOn(bark, -r * 0.07f, r * 0.9f, -r * 0.04f, r * 0.9f, -r * 0.04f, r * 1.1f, -r * 0.07f, r * 1.1f)
+                polyOn(bark, r * 0.04f, r * 0.9f, r * 0.06f, r * 0.9f, r * 0.06f, r * 1.1f, r * 0.04f, r * 1.1f)
+            }
         }
         StampShape.ROUNDTREE -> {
             disc(0f, -r * 0.25f, r * 0.65f)
             disc(-r * 0.45f, -r * 0.05f, r * 0.45f)
             disc(r * 0.45f, -r * 0.05f, r * 0.45f)
-            poly(-r * 0.1f, r * 0.3f, r * 0.1f, r * 0.3f, r * 0.1f, r, -r * 0.1f, r)
+            polyOn(trunk ?: path, -r * 0.1f, r * 0.3f, r * 0.1f, r * 0.3f, r * 0.1f, r, -r * 0.1f, r)
+            if (bark != null) {
+                polyOn(bark, -r * 0.06f, r * 0.3f, -r * 0.03f, r * 0.3f, -r * 0.03f, r, -r * 0.06f, r)
+                polyOn(bark, r * 0.03f, r * 0.35f, r * 0.055f, r * 0.35f, r * 0.055f, r * 0.95f, r * 0.03f, r * 0.95f)
+            }
         }
         StampShape.BAMBOO -> {
             poly(-r * 0.1f, -r, r * 0.1f, -r, r * 0.1f, r, -r * 0.1f, r)
@@ -511,11 +547,48 @@ private fun buildStamps(s: BrushStroke, preset: BrushPreset): List<Pair<Float, P
     return listOf(0.4f to low, 0.7f to mid, 1f to high)
 }
 
+/**
+ * Pincéis da natureza com cores próprias. Árvore: tronco castanho com rugas (cor fixa, igual a uma árvore real) e copa
+ * na cor escolhida, em três tons. Galho: só castanho, em dois tons. Relva: lâminas em três tons da cor escolhida
+ * (sombra, base e luz), para parecer relva com volume e partes mais escuras.
+ */
+private fun buildNatureStamps(s: BrushStroke, preset: BrushPreset, nature: Nature): List<TintBucket> {
+    val crown = arrayOf(Path(), Path(), Path())
+    val trunkA = Path()
+    val trunkB = Path()
+    val bark = Path()
+    val stamps = StampGeometry.generate(s.points, s.width, preset, seedOf(s).toInt())
+    for ((k, st) in stamps.withIndex()) {
+        val pick = (k * 7 + (abs(st.x) * 3f).toInt() + (abs(st.y) * 5f).toInt()) % 3
+        when (nature) {
+            Nature.TREE -> addStamp(crown[pick], preset.stamp, st, if (k % 2 == 0) trunkA else trunkB, bark)
+            Nature.BRANCH -> addStamp(if (k % 2 == 0) trunkA else trunkB, preset.stamp, st)
+            else -> addStamp(crown[pick], preset.stamp, st)
+        }
+    }
+    val out = ArrayList<TintBucket>()
+    if (nature == Nature.TREE || nature == Nature.BRANCH) {
+        out.add(TintBucket(trunkA, 1f, 0f, BrownA))
+        out.add(TintBucket(trunkB, 1f, 0f, BrownB))
+    }
+    if (nature == Nature.TREE) out.add(TintBucket(bark, 1f, 0f, BarkDark))
+    if (nature != Nature.BRANCH) {
+        out.add(TintBucket(crown[0], 1f, -0.28f, null))
+        out.add(TintBucket(crown[1], 1f, 0f, null))
+        out.add(TintBucket(crown[2], 1f, 0.22f, null))
+    }
+    return out
+}
+
 private fun buildInk(s: BrushStroke): InkRender {
     val preset = if (s.brush.isNotEmpty()) BrushLibrary.byIdOrNull(s.brush) else null
     val grain = preset?.grain ?: 0f
     val gk = preset?.texture ?: GrainKind.PAPER
     if (preset != null && preset.stamp != StampShape.NONE) {
+        val nature = BrushDynamics.nature(preset)
+        if (nature != Nature.NONE) {
+            return InkRender(emptyList(), null, null, 0f, 0f, null, grain, gk, tinted = buildNatureStamps(s, preset, nature))
+        }
         return InkRender(emptyList(), buildStamps(s, preset), null, 0f, 0f, null, grain, gk)
     }
     if (preset != null) {
@@ -523,7 +596,7 @@ private fun buildInk(s: BrushStroke): InkRender {
         val br = BrushDynamics.bristle(preset)
         if (br > 0f) {
             val variant = (((seedOf(s) % 6L) + 6L) % 6L).toInt()
-            return InkRender(emptyList(), null, StampGeometry.dabs(s.points, s.width, 0f, 0.05f), 0.5f, 0.7f, null, grain, gk, br, variant)
+            return InkRender(emptyList(), null, StampGeometry.dabs(s.points, s.width, 0f, 0.06f), 0.5f, 0.7f, null, grain, gk, br, variant)
         }
     }
     if (preset != null && preset.soft) {
@@ -842,11 +915,21 @@ private fun DrawScope.drawBristleDabs(dabs: List<Stamp>, variant: Int, amount: F
     }
 }
 
-private fun DrawScope.drawRender(r: InkRender, rgb: Color, blend: BlendMode) {
+/** Tom da cor: negativo escurece (mistura com preto), positivo clareia (mistura com branco). */
+private fun shaded(c: Color, f: Float): Color = if (f < 0f) lerp(c, Color.Black, -f) else lerp(c, Color.White, f * 0.8f)
+
+/** [mono] = tudo na mesma cor (onion skin, borracha): os carimbos da natureza perdem as cores próprias. */
+private fun DrawScope.drawRender(r: InkRender, rgb: Color, blend: BlendMode, mono: Boolean) {
     val dabs = r.dabs
     val lines = r.lines
     val buckets = r.stampBuckets
-    if (dabs != null) {
+    val tinted = r.tinted
+    if (tinted != null) {
+        for (b in tinted) {
+            val col = if (mono) rgb else (b.fixed ?: shaded(rgb, b.shade))
+            fillPath(b.path, col.copy(alpha = b.alpha), blend)
+        }
+    } else if (dabs != null) {
         if (r.bristle > 0f) drawBristleDabs(dabs, r.bristleVariant, r.bristle, r.dabFlow, rgb, blend)
         else drawDabs(dabs, r.dabHardness, r.dabFlow, rgb, blend)
     } else if (lines != null) {
@@ -877,6 +960,7 @@ internal fun DrawScope.drawInk(s: BrushStroke, tint: Color?, useCache: Boolean) 
     val source = tint ?: Color(s.colorArgb)
     val alpha = source.alpha
     val rgb = if (s.erase) Color.Black else source.copy(alpha = 1f)
+    val mono = tint != null || s.erase
     val layerBlend = when {
         s.erase -> BlendMode.DstOut
         s.mode == 1 -> BlendMode.SrcAtop
@@ -887,7 +971,7 @@ internal fun DrawScope.drawInk(s: BrushStroke, tint: Color?, useCache: Boolean) 
     if (!needLayer) {
         // Borracha total: duas passagens DstOut tiram o fio de anti-aliasing que sobrava nas bordas ((1-c)² em vez de (1-c)).
         val passes = if (s.erase) 2 else 1
-        repeat(passes) { drawRender(render, rgb, if (s.erase) BlendMode.DstOut else BlendMode.SrcOver) }
+        repeat(passes) { drawRender(render, rgb, if (s.erase) BlendMode.DstOut else BlendMode.SrcOver, mono) }
         return
     }
     val b = s.bounds() ?: return
@@ -897,7 +981,7 @@ internal fun DrawScope.drawInk(s: BrushStroke, tint: Color?, useCache: Boolean) 
     paint.alpha = alpha
     paint.blendMode = layerBlend
     drawContext.canvas.saveLayer(rect, paint)
-    drawRender(render, rgb, BlendMode.SrcOver)
+    drawRender(render, rgb, BlendMode.SrcOver, mono)
     if (render.grain > 0f) drawGrain(render.grain, render.grainKind, rect)
     drawContext.canvas.restore()
 }
