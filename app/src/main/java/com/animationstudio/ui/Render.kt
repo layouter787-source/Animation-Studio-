@@ -64,10 +64,13 @@ import kotlin.math.sin
 // ---------------------------------------------------------------------------------------------
 // Traços. Motores: contínuo (espessura uniforme, pontas redondas), toques suaves (aerógrafo/aguarela),
 // cerdas (óleo, acrílico, leque: toques com padrão de cerdas rodado pela direção do traço), linhas paralelas
-// (borrachas de cerdas), carimbos (plantas, luz, formas), pincéis da natureza com cores próprias (tronco
-// castanho, galhos, tons da relva) e textura procedural aplicada por cima
-// (papel, tela, madeira, pedra, nuvem, couro, areia, grunge, metal, concreto).
+// (borrachas de cerdas), carimbos (motor mantido, sem pincéis na biblioteca) e textura procedural aplicada por
+// cima (papel, tela, madeira, pedra, nuvem, couro, areia, grunge, metal, concreto).
 // A borracha NUNCA pinta de branco: usa composição DstOut (remove a opacidade do que existe na camada).
+//
+// DESEMPENHO: no editor, cada camada de cada frame é rasterizada UMA vez para uma imagem (ver [rasterFor]) e o ecrã só
+// junta essas imagens. Um traço novo é acrescentado à imagem existente (custo constante), em vez de redesenhar todos
+// os traços a cada imagem do ecrã. As exportações e o balde continuam a usar o desenho vetorial completo.
 // ---------------------------------------------------------------------------------------------
 
 private class InkPass(val width: Float, val alpha: Float, val body: Path?, val polys: List<Path>, val tips: List<Pair<Offset, Float>>)
@@ -113,6 +116,72 @@ internal fun warmUpTextures() {
     Thread {
         for (k in GrainKind.values()) textureData(k)
     }.apply { isDaemon = true; name = "texture-warmup" }.start()
+}
+
+// ---------------------------------------------------------------------------------------------
+// Cache raster por camada
+// ---------------------------------------------------------------------------------------------
+
+/** Imagem da camada [strokes] (a mesma lista de traços, por identidade) com o tamanho da folha [sw]×[sh]. */
+private class LayerRaster(val strokes: List<BrushStroke>, val sw: Int, val sh: Int, val bmp: ImageBitmap)
+
+/** Lado maior da imagem de cada camada (folhas maiores são reduzidas: Full HD fica 1:1, 4K e 8K ficam em 1920). */
+private const val RASTER_MAX_SIDE = 1920
+
+/** Memória máxima das imagens em cache (as menos usadas saem primeiro). */
+private const val RASTER_MAX_BYTES = 192L * 1024L * 1024L
+
+private val rasterCache = LinkedHashMap<Long, LayerRaster>(16, 0.75f, true)
+
+private fun rasterBytes(r: LayerRaster): Long = r.bmp.width.toLong() * r.bmp.height.toLong() * 4L
+
+private fun renderRaster(strokes: List<BrushStroke>, sw: Int, sh: Int, base: LayerRaster?): LayerRaster {
+    val k = min(1f, RASTER_MAX_SIDE / max(sw, sh).toFloat())
+    val rw = max(1, (sw * k).roundToInt())
+    val rh = max(1, (sh * k).roundToInt())
+    val bmp = ImageBitmap(rw, rh)
+    val canvas = GfxCanvas(bmp)
+    CanvasDrawScope().draw(Density(1f), LayoutDirection.Ltr, canvas, Size(rw.toFloat(), rh.toFloat())) {
+        if (base != null) {
+            // Cria a imagem nova a partir da anterior e acrescenta só o último traço.
+            drawImage(base.bmp, blendMode = BlendMode.Src)
+            withTransform({ scale(rw / sw.toFloat(), rh / sh.toFloat(), Offset.Zero) }) {
+                clipRect(0f, 0f, sw.toFloat(), sh.toFloat()) { drawElement(strokes.last(), null, true) }
+            }
+        } else {
+            withTransform({ scale(rw / sw.toFloat(), rh / sh.toFloat(), Offset.Zero) }) {
+                clipRect(0f, 0f, sw.toFloat(), sh.toFloat()) { drawElements(strokes, null, true) }
+            }
+        }
+    }
+    return LayerRaster(strokes, sw, sh, bmp)
+}
+
+/**
+ * Imagem em cache da camada. Se a lista de traços é a mesma, devolve-a; se só foi acrescentado um traço (sem
+ * preenchimento), acrescenta-o à imagem anterior; caso contrário (desfazer, apagar, preenchimento…) redesenha.
+ */
+private fun rasterFor(layerId: Long, frameId: Long, strokes: List<BrushStroke>, sw: Int, sh: Int): LayerRaster {
+    val key = layerId * 1_000_003L + frameId
+    val cur = rasterCache[key]
+    if (cur != null && cur.strokes === strokes && cur.sw == sw && cur.sh == sh) return cur
+    val canExtend = cur != null && cur.sw == sw && cur.sh == sh && cur.strokes.isNotEmpty() &&
+        strokes.size == cur.strokes.size + 1 && strokes[strokes.size - 2] === cur.strokes[cur.strokes.size - 1] &&
+        strokes.last().fill == null
+    val next = renderRaster(strokes, sw, sh, if (canExtend) cur else null)
+    rasterCache[key] = next
+    var total = 0L
+    for (r in rasterCache.values) total += rasterBytes(r)
+    if (total > RASTER_MAX_BYTES) {
+        val it = rasterCache.entries.iterator()
+        while (total > RASTER_MAX_BYTES && it.hasNext()) {
+            val e = it.next()
+            if (e.key == key) continue
+            total -= rasterBytes(e.value)
+            it.remove()
+        }
+    }
+    return next
 }
 
 private fun polyPath(poly: List<Point>): Path {
@@ -547,11 +616,7 @@ private fun buildStamps(s: BrushStroke, preset: BrushPreset): List<Pair<Float, P
     return listOf(0.4f to low, 0.7f to mid, 1f to high)
 }
 
-/**
- * Pincéis da natureza com cores próprias. Árvore: tronco castanho com rugas (cor fixa, igual a uma árvore real) e copa
- * na cor escolhida, em três tons. Galho: só castanho, em dois tons. Relva: lâminas em três tons da cor escolhida
- * (sombra, base e luz), para parecer relva com volume e partes mais escuras.
- */
+/** Carimbos da natureza com cores próprias (motor mantido para projetos antigos). */
 private fun buildNatureStamps(s: BrushStroke, preset: BrushPreset, nature: Nature): List<TintBucket> {
     val crown = arrayOf(Path(), Path(), Path())
     val trunkA = Path()
@@ -1081,6 +1146,7 @@ internal fun DrawScope.drawElements(
 /**
  * Camadas de um frame, de baixo para cima, cada uma isolada (opacidade da camada e borracha só afetam a própria).
  * [kind] filtra por tipo de camada (null = todas). [live] é o traço em curso, desenhado na camada [liveLayerId].
+ * Com [useCache] (editor) cada camada vem da imagem em cache; sem ele (exportação, balde) desenha-se tudo em vetor.
  */
 internal fun DrawScope.drawFrameLayers(
     project: Project,
@@ -1105,7 +1171,18 @@ internal fun DrawScope.drawFrameLayers(
         val paint = Paint()
         paint.alpha = l.opacityPercent / 100f
         drawContext.canvas.saveLayer(Rect(0f, 0f, sw, sh), paint)
-        drawElements(strokes, tint, useCache, if (l.id == selLayerId) selected else null, selTransform)
+        val cacheable = useCache && strokes.isNotEmpty() && (selected == null || l.id != selLayerId)
+        if (cacheable) {
+            val r = rasterFor(l.id, frameId, strokes, sw.roundToInt(), sh.roundToInt())
+            val filter = if (tint != null) ColorFilter.tint(tint, BlendMode.SrcIn) else null
+            drawImage(
+                r.bmp, srcOffset = IntOffset.Zero, srcSize = IntSize(r.bmp.width, r.bmp.height),
+                dstOffset = IntOffset.Zero, dstSize = IntSize(r.sw, r.sh),
+                colorFilter = filter, filterQuality = FilterQuality.Medium,
+            )
+        } else {
+            drawElements(strokes, tint, useCache, if (l.id == selLayerId) selected else null, selTransform)
+        }
         if (live != null && hasLive) drawElement(live, tint, false)
         drawContext.canvas.restore()
     }
