@@ -37,8 +37,11 @@ class TimingTest {
 
     @Test fun smoothEasingStartsSlowly() {
         val t = Timing().withKey(10L, CameraKey(0f, 0f, 1f, 0f, Ease.SMOOTH)).withKey(30L, CameraKey(100f, 0f, 1f, 0f))
-        val early = TimingMath.cameraAt(ids, t, 1f, 400f, 300f)
+        // Chaves nos tempos 0 e 2; a meio-caminho do primeiro troco (tempo 0,5) a câmara mal saiu do sítio.
+        val early = TimingMath.cameraAt(ids, t, 0.5f, 400f, 300f)
         assertTrue(early.cx < 25f)
+        val mid = TimingMath.cameraAt(ids, t, 1f, 400f, 300f)
+        assertEquals(50f, mid.cx, tol)
     }
 
     @Test fun cameraAffineCentersAndFramesTheView() {
