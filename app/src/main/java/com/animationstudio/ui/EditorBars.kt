@@ -57,7 +57,6 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.animationstudio.domain.Layer
-import com.animationstudio.domain.LayerKind
 
 /** Cartão do estúdio: superfície azul escura com contorno fino e cantos arredondados. */
 internal fun Modifier.studioCard(radius: Dp = 14.dp): Modifier {
@@ -186,11 +185,6 @@ internal fun TopBar(
                             .padding(horizontal = 7.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
-                        Box(
-                            Modifier.size(7.dp).clip(RoundedCornerShape(4.dp))
-                                .background(if (l.kind == LayerKind.SCENERY) StudioColors.Mint else StudioColors.Accent)
-                        )
-                        Spacer(Modifier.width(5.dp))
                         Text(
                             l.name, style = StudioType.Label.copy(fontSize = 11.sp), maxLines = 1, overflow = TextOverflow.Ellipsis,
                             textDecoration = if (l.visible) TextDecoration.None else TextDecoration.LineThrough,
