@@ -6,8 +6,12 @@ import org.junit.Test
 import kotlin.math.abs
 
 class PhaseADomainTest {
+    /** A biblioteca já não tem carimbos, mas o motor continua testado com pincéis construídos à mão. */
+    private fun stampPreset(shape: StampShape, scatter: Float, density: Int) =
+        BrushPreset("t_${shape.name}", shape.name, "t", BrushKind.BRUSH, 60f, 1f, 0f, 1f, shape, 0.15f, scatter, 0.5f, density)
+
     @Test fun stampsAreDeterministicAndBoundedByScatter() {
-        val preset = BrushLibrary.byId("grass")
+        val preset = stampPreset(StampShape.GRASS, 0.5f, 2)
         val line = List(11) { Point(it * 10f, 0f) }
         val a = StampGeometry.generate(line, 20f, preset, 42)
         val b = StampGeometry.generate(line, 20f, preset, 42)
@@ -26,7 +30,8 @@ class PhaseADomainTest {
     @Test fun continuousBrushesProduceNoStamps() {
         val line = List(5) { Point(it * 10f, 0f) }
         assertTrue(StampGeometry.generate(line, 6f, BrushLibrary.byId("ink_g"), 1).isEmpty())
-        assertEquals(1, StampGeometry.generate(listOf(Point(3f, 4f)), 20f, BrushLibrary.byId("dots"), 1).size / BrushLibrary.byId("dots").density)
+        val dots = stampPreset(StampShape.DOT, 0.9f, 2)
+        assertEquals(1, StampGeometry.generate(listOf(Point(3f, 4f)), 20f, dots, 1).size / dots.density)
     }
 
     @Test fun libraryIsOrganizedAndSearchable() {
@@ -36,7 +41,7 @@ class PhaseADomainTest {
         assertTrue(BrushLibrary.brushCategories.all { c -> BrushLibrary.ofKind(BrushKind.BRUSH).any { it.category == c } })
         // Sem acentos nem maiúsculas: "LAPIS" encontra "Lápis ...".
         assertTrue(BrushLibrary.search(BrushKind.BRUSH, "LAPIS", null).size >= 5)
-        assertTrue(BrushLibrary.search(BrushKind.BRUSH, "arvore", null).any { it.id == "leaves" })
+        assertTrue(BrushLibrary.search(BrushKind.BRUSH, "arvore", null).any { it.id == "tree_bark" })
         assertTrue(BrushLibrary.search(BrushKind.BRUSH, "xyzxyz", null).isEmpty())
         assertTrue(BrushLibrary.search(BrushKind.ERASER, "", null).size == BrushLibrary.ofKind(BrushKind.ERASER).size)
     }
