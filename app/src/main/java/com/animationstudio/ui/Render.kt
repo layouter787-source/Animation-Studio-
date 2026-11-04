@@ -826,9 +826,13 @@ internal fun DrawScope.drawInk(s: BrushStroke, tint: Color?, useCache: Boolean) 
     paint.alpha = alpha
     paint.blendMode = layerBlend
     drawContext.canvas.saveLayer(rect, paint)
-    drawRender(render, rgb, BlendMode.SrcOver)
-    if (render.grain > 0f) drawGrain(render.grain, render.grainKind, rect)
-    drawContext.canvas.restore()
+    try {
+        drawRender(render, rgb, BlendMode.SrcOver)
+        if (render.grain > 0f) drawGrain(render.grain, render.grainKind, rect)
+    } finally {
+        // A pré-visualização pode falhar num preset malformado; nunca deixar a pilha do Canvas desequilibrada.
+        drawContext.canvas.restore()
+    }
 }
 
 // ---------------------------------------------------------------------------------------------
