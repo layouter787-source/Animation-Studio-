@@ -15,9 +15,12 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Search
@@ -40,8 +43,11 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.CompositingStrategy
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
@@ -53,6 +59,7 @@ import com.animationstudio.domain.BrushPreset
 import kotlin.math.exp
 import kotlin.math.ln
 import kotlin.math.roundToInt
+import android.util.Log
 
 private val SizeLog = ln(BrushLimits.MAX_SIZE)
 
@@ -60,9 +67,41 @@ private val SizeLog = ln(BrushLimits.MAX_SIZE)
 private val PopupAlpha = 0.8f
 
 /** Tamanho (1–2000 px) numa escala logarítmica: o controlo fino fica nos tamanhos pequenos. */
-private fun sizeFromSlider(t: Float): Float = exp(t.coerceIn(0f, 1f) * SizeLog).coerceIn(BrushLimits.MIN_SIZE, BrushLimits.MAX_SIZE)
+private fun safeBrushSize(value: Float, fallback: Float): Float {
+    val safeFallback = if (fallback.isFinite()) fallback.coerceIn(BrushLimits.MIN_SIZE, BrushLimits.MAX_SIZE) else BrushLimits.MIN_SIZE
+    return if (value.isFinite()) value.coerceIn(BrushLimits.MIN_SIZE, BrushLimits.MAX_SIZE) else safeFallback
+}
 
-private fun sliderFromSize(s: Float): Float = (ln(s.coerceIn(BrushLimits.MIN_SIZE, BrushLimits.MAX_SIZE)) / SizeLog).coerceIn(0f, 1f)
+private fun safeUnit(value: Float, fallback: Float): Float {
+    val safeFallback = if (fallback.isFinite()) fallback.coerceIn(0f, 1f) else 0f
+    return if (value.isFinite()) value.coerceIn(0f, 1f) else safeFallback
+}
+
+private fun sizeFromSlider(t: Float): Float {
+    val safe = if (t.isFinite()) t.coerceIn(0f, 1f) else 0f
+    return exp(safe * SizeLog).coerceIn(BrushLimits.MIN_SIZE, BrushLimits.MAX_SIZE)
+}
+
+private fun sliderFromSize(s: Float): Float =
+    (ln(safeBrushSize(s, BrushLimits.MIN_SIZE)) / SizeLog).coerceIn(0f, 1f)
+
+private fun DrawScope.drawBrushSampleSafely(preset: BrushPreset, width: Float, opacity: Float, ink: Color) {
+    val safeWidth = safeBrushSize(width, preset.defaultSize)
+    val safeOpacity = safeUnit(opacity, preset.defaultOpacity)
+    try {
+        drawBrushSample(preset, safeWidth, safeOpacity, ink)
+    } catch (e: RuntimeException) {
+        Log.e("BrushPreview", "Falha ao desenhar a pré-visualização do pincel ${preset.id}", e)
+        if (size.width <= 0f || size.height <= 0f) return
+        if (preset.kind == BrushKind.ERASER) drawRect(StudioColors.Accent.copy(alpha = 0.85f))
+        drawLine(
+            color = ink.copy(alpha = safeOpacity),
+            start = Offset(size.width * 0.08f, size.height * 0.5f),
+            end = Offset(size.width * 0.92f, size.height * 0.5f),
+            strokeWidth = safeWidth.coerceAtMost((size.height * 0.45f).coerceAtLeast(1f)),
+        )
+    }
+}
 
 @Composable
 private fun StudioSlider(value: Float, onChange: (Float) -> Unit) {
@@ -102,8 +141,8 @@ internal fun BrushLibraryDialog(
     val list = BrushLibrary.search(kind, query, category)
     val shape = RoundedCornerShape(16.dp)
 
-    Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
-        Column(Modifier.width(380.dp).fillMaxHeight(0.94f)) {
+    Dialog(onDismissRequest = onDismiss) {
+        Column(Modifier.fillMaxWidth(0.96f).widthIn(max = 380.dp).fillMaxHeight(0.94f)) {
             Box(
                 Modifier.padding(start = 18.dp).clip(RoundedCornerShape(topStart = 10.dp, topEnd = 10.dp))
                     .background(StudioColors.Surface3.copy(alpha = PopupAlpha)).padding(horizontal = 16.dp, vertical = 4.dp)
@@ -173,7 +212,7 @@ internal fun BrushLibraryDialog(
                                 ) {
                                     Canvas(
                                         Modifier.width(104.dp).fillMaxHeight().graphicsLayer { compositingStrategy = CompositingStrategy.Offscreen }
-                                    ) { drawBrushSample(p, p.defaultSize, p.defaultOpacity, StudioColors.Ink) }
+                                    ) { drawBrushSampleSafely(p, p.defaultSize, p.defaultOpacity, StudioColors.Ink) }
                                     Column(Modifier.weight(1f).padding(horizontal = 6.dp)) {
                                         Text(p.name, style = StudioType.Label.copy(fontSize = 12.sp), maxLines = 1)
                                         Text(p.category.uppercase(), style = StudioType.Caption.copy(fontSize = 8.sp))
@@ -213,21 +252,31 @@ internal fun BrushSettingsDialog(
     onDismiss: () -> Unit,
 ) {
     val shape = RoundedCornerShape(16.dp)
-    val prefs = Prefs(LocalContext.current)
+    val context = LocalContext.current
+    val prefs = remember(context) { Prefs(context) }
+    val maxDialogHeight = LocalConfiguration.current.screenHeightDp.dp * 0.92f
+    val safeSize = safeBrushSize(size, preset.defaultSize)
+    val safeOpacity = safeUnit(opacity, preset.defaultOpacity)
+    val safeSmoothing = safeUnit(smoothing, 0.4f)
+    val safeStabilizer = safeUnit(stabilizer, 0.25f)
     var taper by remember { mutableStateOf(StudioRender.taperEnds) }
     var pixelated by remember { mutableStateOf(StudioRender.pixelated) }
-    Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
+    Dialog(onDismissRequest = onDismiss) {
         Surface(
             color = StudioColors.Surface.copy(alpha = PopupAlpha), shape = shape,
-            modifier = Modifier.width(420.dp).border(1.dp, StudioColors.Outline, shape),
+            modifier = Modifier.fillMaxWidth(0.96f).widthIn(max = 420.dp)
+                .heightIn(max = maxDialogHeight).border(1.dp, StudioColors.Outline, shape),
         ) {
-            Row(Modifier.padding(12.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            Row(
+                Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(12.dp),
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
                 Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                     Text(preset.name, style = StudioType.Title.copy(fontSize = 15.sp))
                     Canvas(
                         Modifier.fillMaxWidth().height(64.dp).clip(RoundedCornerShape(10.dp)).background(StudioColors.Navy)
                             .graphicsLayer { compositingStrategy = CompositingStrategy.Offscreen }
-                    ) { drawBrushSample(preset, size, opacity, StudioColors.Ink) }
+                    ) { drawBrushSampleSafely(preset, safeSize, safeOpacity, StudioColors.Ink) }
                     if (kind == BrushKind.BRUSH) {
                         Text("DESENHAR", style = StudioType.Caption, modifier = Modifier.padding(top = 8.dp, bottom = 3.dp))
                         Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
@@ -248,24 +297,24 @@ internal fun BrushSettingsDialog(
                 Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(0.dp)) {
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                         Text("TAMANHO", style = StudioType.Caption)
-                        Text("${size.roundToInt()} px", style = StudioType.Number)
+                        Text("${safeSize.roundToInt()} px", style = StudioType.Number)
                     }
                     StudioSlider(sliderFromSize(size)) { onSize(sizeFromSlider(it)) }
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                         Text("OPACIDADE", style = StudioType.Caption)
-                        Text("${(opacity * 100).roundToInt()}%", style = StudioType.Number)
+                        Text("${(safeOpacity * 100).roundToInt()}%", style = StudioType.Number)
                     }
-                    StudioSlider(opacity) { onOpacity(it.coerceIn(0.01f, 1f)) }
+                    StudioSlider(safeOpacity) { onOpacity(it.coerceIn(0.01f, 1f)) }
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                         Text("SUAVIZAÇÃO", style = StudioType.Caption)
-                        Text("${(smoothing * 100).roundToInt()}%", style = StudioType.Number)
+                        Text("${(safeSmoothing * 100).roundToInt()}%", style = StudioType.Number)
                     }
-                    StudioSlider(smoothing, onSmoothing)
+                    StudioSlider(safeSmoothing) { onSmoothing(safeUnit(it, 0.4f)) }
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                         Text("ESTABILIZADOR", style = StudioType.Caption)
-                        Text("${(stabilizer * 100).roundToInt()}%", style = StudioType.Number)
+                        Text("${(safeStabilizer * 100).roundToInt()}%", style = StudioType.Number)
                     }
-                    StudioSlider(stabilizer, onStabilizer)
+                    StudioSlider(safeStabilizer) { onStabilizer(safeUnit(it, 0.25f)) }
                     Spacer(Modifier.height(4.dp))
                     Button(onClick = onDismiss, modifier = Modifier.fillMaxWidth()) { Text("Concluir", style = StudioType.Label.copy(color = Color.White)) }
                 }
