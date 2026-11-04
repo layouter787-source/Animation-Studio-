@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -51,7 +52,6 @@ import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
-import androidx.compose.ui.window.DialogProperties
 import com.animationstudio.domain.BrushKind
 import com.animationstudio.domain.BrushLibrary
 import com.animationstudio.domain.BrushLimits
@@ -299,7 +299,7 @@ internal fun BrushSettingsDialog(
                         Text("TAMANHO", style = StudioType.Caption)
                         Text("${safeSize.roundToInt()} px", style = StudioType.Number)
                     }
-                    StudioSlider(sliderFromSize(size)) { onSize(sizeFromSlider(it)) }
+                    StudioSlider(sliderFromSize(safeSize)) { onSize(sizeFromSlider(it)) }
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                         Text("OPACIDADE", style = StudioType.Caption)
                         Text("${(safeOpacity * 100).roundToInt()}%", style = StudioType.Number)
