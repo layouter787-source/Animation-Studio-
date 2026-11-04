@@ -65,6 +65,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.geometry.isSpecified
 import androidx.compose.ui.graphics.Color
@@ -72,8 +73,10 @@ import androidx.compose.ui.graphics.CompositingStrategy
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.PathEffect
+import androidx.compose.ui.graphics.PathFillType
 import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.DrawTransform
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.clipRect
@@ -97,6 +100,8 @@ import com.animationstudio.data.ProjectStore
 import com.animationstudio.domain.Affine
 import com.animationstudio.domain.BrushLibrary
 import com.animationstudio.domain.BrushStroke
+import com.animationstudio.domain.CameraKey
+import com.animationstudio.domain.Ease
 import com.animationstudio.domain.ImageData
 import com.animationstudio.domain.Lasso
 import com.animationstudio.domain.LayerKind
@@ -105,9 +110,12 @@ import com.animationstudio.domain.Point
 import com.animationstudio.domain.Project
 import com.animationstudio.domain.QuadTransform
 import com.animationstudio.domain.StrokeStabilizer
+import com.animationstudio.domain.Timing
+import com.animationstudio.domain.TimingMath
 import com.animationstudio.domain.ViewTransform
 import com.animationstudio.domain.addFill
 import com.animationstudio.domain.frameClip
+import com.animationstudio.domain.importImages
 import com.animationstudio.domain.insertFrameAt
 import com.animationstudio.domain.moveLayer
 import com.animationstudio.domain.nextPlaybackStep
@@ -208,6 +216,16 @@ private suspend fun persist(store: ProjectStore, meta: ProjectMeta, fps: Int, pr
         }
     }
 
+private suspend fun persistTiming(store: ProjectStore, id: String, timing: Timing) {
+    withContext(Dispatchers.IO) {
+        try {
+            store.saveTiming(id, timing)
+        } catch (e: Exception) {
+            // o próximo guardar tenta de novo
+        }
+    }
+}
+
 /** Botão só com ícone, sobre a folha (laço): sem texto. */
 @Composable
 private fun OverlayIconChip(
@@ -263,6 +281,10 @@ fun AnimationEditor(meta: ProjectMeta, initial: Project, store: ProjectStore, on
     var refOffset by remember { mutableStateOf(Offset(40f, 120f)) }
     var refWidth by remember { mutableFloatStateOf(520f) }
     var refOpacity by remember { mutableFloatStateOf(0.85f) }
+    var timing by remember { mutableStateOf(store.loadTiming(meta.id)) }
+    var cameraMode by remember { mutableStateOf(false) }
+    var camView by remember { mutableStateOf(false) }
+    var playTick by remember { mutableIntStateOf(0) }
     val scope = rememberCoroutineScope()
     val sw = sheetW.toFloat()
     val sh = sheetH.toFloat()
@@ -270,13 +292,29 @@ fun AnimationEditor(meta: ProjectMeta, initial: Project, store: ProjectStore, on
     val baseName = remember(meta.name) { meta.name.replace(Regex("[^A-Za-z0-9_-]"), "_").ifBlank { "animacao" } }
 
     fun toast(msg: String) = Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
-    fun soon(what: String) = toast("$what: em desenvolvimento")
     fun close() {
         scope.launch {
             st.commitFloating()
+            persistTiming(store, meta.id, timing)
             if (!persist(store, curMeta, fps, st.project)) toast("Não foi possível guardar o projeto")
             onClose()
         }
+    }
+
+    /** Câmara efetiva do frame atual (keyframe ou interpolada) com um ajuste; cria/atualiza o keyframe. */
+    fun editCamera(dx: Float, dy: Float, zoomF: Float, rotRad: Float) {
+        val ids = st.project.frameIds
+        val fid = st.project.currentFrameId
+        val w = sheetW.toFloat()
+        val h = sheetH.toFloat()
+        val start = TimingMath.startTicks(ids, timing)[st.project.currentFrame].toFloat()
+        val cur = timing.camera[fid] ?: TimingMath.cameraAt(ids, timing, start, w, h)
+        val nk = cur.copy(
+            cx = cur.cx + dx, cy = cur.cy + dy,
+            zoom = (cur.zoom / zoomF.coerceIn(0.5f, 2f)).coerceIn(0.1f, 20f),
+            rotation = cur.rotation + rotRad,
+        )
+        timing = timing.withKey(fid, nk)
     }
 
     fun requestFill(p: Point) {
@@ -358,12 +396,65 @@ fun AnimationEditor(meta: ProjectMeta, initial: Project, store: ProjectStore, on
             if (img == null) toast("Não foi possível abrir a imagem") else { refImage = img; refVisible = true }
         }
     }
+    // Importar imagem: entra como seleção flutuante na camada ativa, para ajustar (mover, escalar, rodar) e confirmar.
+    val imageLauncher = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
+        if (uri != null) scope.launch {
+            val layer = st.project.layers.firstOrNull { it.id == st.activeLayerId }
+            if (layer == null || !layer.visible) {
+                toast("Escolha uma camada visível para importar")
+                return@launch
+            }
+            val img = MediaImport.loadImage(context, uri, sheetW, sheetH)
+            if (img == null) {
+                toast("Não foi possível abrir a imagem")
+            } else {
+                cameraMode = false
+                camView = false
+                st.selectTool(Tool.LASSO)
+                st.beginFloating(img, st.activeLayerId)
+                toast("Ajuste a imagem e confirme")
+            }
+        }
+    }
+    // Importar vídeo: um frame novo por imagem extraída, ao ritmo do projeto (até 150 frames).
+    val videoLauncher = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
+        if (uri != null) scope.launch {
+            val target = st.project.layers.firstOrNull { it.id == st.activeLayerId && it.kind == LayerKind.DRAWING }?.id
+                ?: st.project.layers.lastOrNull { it.kind == LayerKind.DRAWING }?.id
+            if (target == null) {
+                toast("Precisa de uma camada de desenho")
+                return@launch
+            }
+            toast("A importar frames…")
+            val frames = MediaImport.loadVideoFrames(context, uri, fps, sheetW, sheetH, 150)
+            if (frames.isEmpty()) {
+                toast("Não foi possível ler o vídeo")
+            } else {
+                st.commitFloating()
+                st.edit { it.importImages(target, frames) }
+                toast("${frames.size} frames importados")
+            }
+        }
+    }
+    val videoExportLauncher = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("video/mp4")) { uri ->
+        if (uri != null) scope.launch {
+            st.commitFloating()
+            toast("A exportar vídeo…")
+            val ok = VideoExporter.export(context, uri, st.project, timing, fps, sheetW, sheetH)
+            toast(if (ok) "Vídeo exportado" else "Falha ao exportar o vídeo")
+        }
+    }
 
     BackHandler { close() }
 
     LaunchedEffect(st.project, fps, sheetW, sheetH) {
         delay(400)
         if (!persist(store, curMeta, fps, st.project)) toast("Não foi possível guardar o projeto")
+    }
+
+    LaunchedEffect(timing) {
+        delay(300)
+        persistTiming(store, meta.id, timing)
     }
 
     LaunchedEffect(canvasSize) {
@@ -373,12 +464,22 @@ fun AnimationEditor(meta: ProjectMeta, initial: Project, store: ProjectStore, on
         }
     }
 
+    // Reprodução por tempos: cada frame fica visível tantos tempos quantos a sua duração; a câmara avança tempo a tempo.
     LaunchedEffect(st.playing, fps) {
         if (!st.playing) return@LaunchedEffect
         var dir = 1
         val interval = 1000L / fps.coerceAtLeast(1)
         while (st.playing) {
-            delay(interval)
+            val ids = st.project.frameIds
+            val fi = st.project.currentFrame
+            val start = TimingMath.startTicks(ids, timing)[fi]
+            val hold = timing.hold(ids[fi])
+            for (k in 0 until hold) {
+                playTick = start + k
+                delay(interval)
+                if (!st.playing) break
+            }
+            if (!st.playing) break
             val step = nextPlaybackStep(st.project.currentFrame, st.project.frameCount, st.playMode, dir)
             dir = step.direction
             st.project = st.project.select(step.index)
@@ -396,23 +497,28 @@ fun AnimationEditor(meta: ProjectMeta, initial: Project, store: ProjectStore, on
     }
 
     val timelineBar: @Composable () -> Unit = {
-        TopBar(
-            st = st, sw = sheetW, sh = sheetH, expanded = expanded,
+        TimelineBar(
+            st = st, timing = timing, cameraActive = cameraMode, sw = sheetW, sh = sheetH, expanded = expanded,
             onMenu = { dialog = EditorDialog.Menu },
             onAdd = { dialog = EditorDialog.AddLayer },
-            onCamera = { soon("Câmara") },
+            onCamera = {
+                st.commitFloating()
+                cameraMode = !cameraMode
+                if (!cameraMode) camView = false
+            },
             onColor = { dialog = EditorDialog.ColorPicker(it) },
             onOnionOptions = { dialog = EditorDialog.Onion },
             onLayerOptions = { dialog = EditorDialog.LayerOptions(it.id) },
             onMoveLayer = { id, delta -> st.edit { p -> p.moveLayer(id, delta) } },
             onFrameOptions = { dialog = EditorDialog.FrameActions(it) },
+            onHold = { id, ticks -> timing = timing.withHold(id, ticks) },
             onGripEnd = onTimelineGrip,
             onSwatchDrag = { dragPos = it },
             onSwatchDrop = { p ->
                 dragPos = null
                 // Largar a cor sobre a folha pinta a região em que se largou (como no Procreate Dreams).
                 val local = Offset(p.x - canvasRoot.x, p.y - canvasRoot.y)
-                if (local.x in 0f..canvasSize.width.toFloat() && local.y in 0f..canvasSize.height.toFloat()) {
+                if (!cameraMode && local.x in 0f..canvasSize.width.toFloat() && local.y in 0f..canvasSize.height.toFloat()) {
                     requestFill(st.view.screenToProject(Point(local.x, local.y)))
                 }
             },
@@ -446,6 +552,16 @@ fun AnimationEditor(meta: ProjectMeta, initial: Project, store: ProjectStore, on
         )
     }
 
+    // Câmara: a do frame atual (para o retângulo de edição) e a que se vê ao reproduzir ou ao "ver pela câmara".
+    val frameIdsNow = st.project.frameIds
+    val startTicksNow = TimingMath.startTicks(frameIdsNow, timing)
+    val curStartTick = startTicksNow[st.project.currentFrame.coerceIn(0, startTicksNow.lastIndex)]
+    val camKey = TimingMath.cameraAt(frameIdsNow, timing, curStartTick.toFloat(), sw, sh)
+    val previewKey: CameraKey? = if ((camView || st.playing) && timing.hasCamera) {
+        TimingMath.cameraAt(frameIdsNow, timing, if (st.playing) playTick.toFloat() else curStartTick.toFloat(), sw, sh)
+    } else null
+    val previewMatrix = previewKey?.let { affineMatrix(it.outputAffine(sw, sh)) }
+
     Box(Modifier.fillMaxSize().background(StudioColors.Navy).onSizeChanged { rootSize = it }) {
         Column(Modifier.fillMaxSize()) {
             if (!st.timelineBottom) timelineBar()
@@ -469,7 +585,7 @@ fun AnimationEditor(meta: ProjectMeta, initial: Project, store: ProjectStore, on
                             drawRect(Color.Black, topLeft = Offset.Zero, size = Size(sw, sh), style = Stroke(width = 1f / v.scale))
                         }
                     }
-                    // Cenário, onion skin, camadas de desenho, seleção flutuante, grelha.
+                    // Cenário, onion skin, camadas de desenho, seleção flutuante, grelha e enquadramento da câmara.
                     Canvas(Modifier.fillMaxSize().graphicsLayer { compositingStrategy = CompositingStrategy.Offscreen }) {
                         val v = st.view
                         val proj = st.project
@@ -478,27 +594,61 @@ fun AnimationEditor(meta: ProjectMeta, initial: Project, store: ProjectStore, on
                         val fl = st.floating
                         val qd = st.quad
                         val dash = PathEffect.dashPathEffect(floatArrayOf(10f / v.scale, 6f / v.scale))
+                        val drawWorld: DrawScope.() -> Unit = {
+                            drawFrameLayers(proj, fid, sw, sh, LayerKind.SCENERY, null, true, live, st.activeLayerId)
+                            if (st.onionOn && !st.playing && previewMatrix == null) {
+                                val cur = proj.currentFrame
+                                for (k in st.onionBefore downTo 1) {
+                                    val i = cur - k
+                                    if (i >= 0) drawOnionFrame(proj, proj.frameIds[i], sw, sh, StudioColors.Rose, 0.34f / k)
+                                }
+                                for (k in st.onionAfter downTo 1) {
+                                    val i = cur + k
+                                    if (i < proj.frameCount) drawOnionFrame(proj, proj.frameIds[i], sw, sh, StudioColors.Mint, 0.34f / k)
+                                }
+                            }
+                            drawFrameLayers(proj, fid, sw, sh, LayerKind.DRAWING, null, true, live, st.activeLayerId)
+                        }
                         withTransform({ applyView(v) }) {
                             clipRect(0f, 0f, sw, sh) {
-                                drawFrameLayers(proj, fid, sw, sh, LayerKind.SCENERY, null, true, live, st.activeLayerId)
-                                if (st.onionOn && !st.playing) {
-                                    val cur = proj.currentFrame
-                                    for (k in st.onionBefore downTo 1) {
-                                        val i = cur - k
-                                        if (i >= 0) drawOnionFrame(proj, proj.frameIds[i], sw, sh, StudioColors.Rose, 0.34f / k)
+                                if (previewMatrix != null) {
+                                    withTransform({ transform(previewMatrix) }) { drawWorld() }
+                                } else {
+                                    drawWorld()
+                                    if (fl != null) {
+                                        if (qd != null) drawWarped(fl, qd) else drawImageData(fl, null, true)
                                     }
-                                    for (k in st.onionAfter downTo 1) {
-                                        val i = cur + k
-                                        if (i < proj.frameCount) drawOnionFrame(proj, proj.frameIds[i], sw, sh, StudioColors.Mint, 0.34f / k)
-                                    }
+                                    drawGridOverlay(st.gridType, st.gridCell, sw, sh, Color(0xFF3DA5FF).copy(alpha = 0.55f), 1f / v.scale)
                                 }
-                                drawFrameLayers(proj, fid, sw, sh, LayerKind.DRAWING, null, true, live, st.activeLayerId)
-                                if (fl != null) {
-                                    if (qd != null) drawWarped(fl, qd) else drawImageData(fl, null, true)
-                                }
-                                drawGridOverlay(st.gridType, st.gridCell, sw, sh, Color(0xFF3DA5FF).copy(alpha = 0.55f), 1f / v.scale)
                             }
-                            if (fl != null && qd != null) {
+                            if (cameraMode && previewMatrix == null) {
+                                val rect = camKey.rect(sw, sh)
+                                if (rect.size == 4) {
+                                    val dim = Path()
+                                    dim.fillType = PathFillType.EvenOdd
+                                    dim.addRect(Rect(-sw * 3f, -sh * 3f, sw * 4f, sh * 4f))
+                                    dim.moveTo(rect[0].x, rect[0].y)
+                                    for (i in 1..3) dim.lineTo(rect[i].x, rect[i].y)
+                                    dim.close()
+                                    drawPath(dim, Color.Black.copy(alpha = 0.4f))
+                                    val outline = Path()
+                                    outline.moveTo(rect[0].x, rect[0].y)
+                                    for (i in 1..3) outline.lineTo(rect[i].x, rect[i].y)
+                                    outline.close()
+                                    drawPath(outline, StudioColors.Amber, style = Stroke(width = 2.5f / v.scale))
+                                    val hr = 6f / v.scale
+                                    for (c in rect) {
+                                        drawCircle(Color.White, hr, Offset(c.x, c.y))
+                                        drawCircle(StudioColors.Amber, hr, Offset(c.x, c.y), style = Stroke(width = 2f / v.scale))
+                                    }
+                                    val cx = (rect[0].x + rect[2].x) / 2f
+                                    val cy = (rect[0].y + rect[2].y) / 2f
+                                    val arm = 10f / v.scale
+                                    drawLine(StudioColors.Amber, Offset(cx - arm, cy), Offset(cx + arm, cy), strokeWidth = 2f / v.scale)
+                                    drawLine(StudioColors.Amber, Offset(cx, cy - arm), Offset(cx, cy + arm), strokeWidth = 2f / v.scale)
+                                }
+                            }
+                            if (previewMatrix == null && fl != null && qd != null) {
                                 // Perspetiva: 4 cantos, 4 pegas de aresta (esticar/comprimir), rotação e pivô.
                                 val outline = Path()
                                 outline.moveTo(qd[0].x, qd[0].y)
@@ -528,7 +678,7 @@ fun AnimationEditor(meta: ProjectMeta, initial: Project, store: ProjectStore, on
                                 drawCircle(Color.White, pr, Offset(pv.x, pv.y))
                                 drawCircle(StudioColors.Accent, pr, Offset(pv.x, pv.y), style = Stroke(width = 2f / v.scale))
                                 drawCircle(StudioColors.Accent, pr * 0.3f, Offset(pv.x, pv.y))
-                            } else if (fl != null) {
+                            } else if (previewMatrix == null && fl != null) {
                                 val cs = fl.corners()
                                 val outline = Path()
                                 outline.moveTo(cs[0].x, cs[0].y)
@@ -563,6 +713,38 @@ fun AnimationEditor(meta: ProjectMeta, initial: Project, store: ProjectStore, on
                                 val down = awaitFirstDown(requireUnconsumed = false)
                                 if (st.playing) {
                                     do { val e = awaitPointerEvent() } while (e.changes.any { it.pressed })
+                                    return@awaitEachGesture
+                                }
+                                // Modo câmara: um dedo move o enquadramento; dois dedos esticam e rodam. Cada gesto cria/atualiza o keyframe.
+                                if (cameraMode) {
+                                    var last = down.position
+                                    down.consume()
+                                    do {
+                                        val event = awaitPointerEvent()
+                                        val pressed = event.changes.count { it.pressed }
+                                        if (pressed >= 2) {
+                                            val c = event.calculateCentroid(useCurrent = true)
+                                            if (c.isSpecified) {
+                                                val pan = event.calculatePan()
+                                                val zoom = event.calculateZoom()
+                                                val rot = Math.toRadians(event.calculateRotation().toDouble()).toFloat()
+                                                val cur = st.view.screenToProject(Point(c.x, c.y))
+                                                val prev = st.view.screenToProject(Point(c.x - pan.x, c.y - pan.y))
+                                                editCamera(cur.x - prev.x, cur.y - prev.y, zoom, rot)
+                                            }
+                                            val first = event.changes.firstOrNull()
+                                            if (first != null) last = first.position
+                                        } else if (pressed == 1) {
+                                            val ch = event.changes.firstOrNull { it.pressed }
+                                            if (ch != null) {
+                                                val a = st.view.screenToProject(Point(last.x, last.y))
+                                                val b = st.view.screenToProject(Point(ch.position.x, ch.position.y))
+                                                editCamera(b.x - a.x, b.y - a.y, 1f, 0f)
+                                                last = ch.position
+                                            }
+                                        }
+                                        event.changes.forEach { if (it.positionChanged()) it.consume() }
+                                    } while (event.changes.any { it.pressed })
                                     return@awaitEachGesture
                                 }
                                 val tool = st.tool
@@ -750,7 +932,23 @@ fun AnimationEditor(meta: ProjectMeta, initial: Project, store: ProjectStore, on
                         onLongClick = { refLauncher.launch("image/*") },
                         onClick = { if (refImage == null) refLauncher.launch("image/*") else refVisible = !refVisible },
                     ) { Icon(Icons.Default.Image, "Referência", tint = it, modifier = Modifier.size(18.dp)) }
-                    if (st.tool == Tool.LASSO) {
+                    if (cameraMode) {
+                        val curKey = timing.camera[st.project.currentFrameId]
+                        CameraPanel(
+                            hasKey = curKey != null,
+                            ease = curKey?.ease ?: Ease.SMOOTH,
+                            viewThroughCamera = camView,
+                            onToggleEase = {
+                                val k = timing.camera[st.project.currentFrameId]
+                                if (k == null) toast("Mova a câmara para criar um keyframe")
+                                else timing = timing.withKey(st.project.currentFrameId, k.copy(ease = if (k.ease == Ease.SMOOTH) Ease.LINEAR else Ease.SMOOTH))
+                            },
+                            onDeleteKey = { timing = timing.withoutKey(st.project.currentFrameId) },
+                            onToggleView = { camView = !camView },
+                            onClose = { cameraMode = false; camView = false },
+                            modifier = Modifier.align(Alignment.TopCenter).padding(top = 8.dp),
+                        )
+                    } else if (st.tool == Tool.LASSO) {
                         Column(
                             Modifier.align(Alignment.TopCenter).padding(top = 8.dp).studioCard(12.dp).padding(3.dp),
                             verticalArrangement = Arrangement.spacedBy(3.dp),
@@ -828,14 +1026,16 @@ fun AnimationEditor(meta: ProjectMeta, initial: Project, store: ProjectStore, on
 
     when (val d = dialog) {
         null -> {}
-        EditorDialog.Menu -> MenuPopup(
+        EditorDialog.Menu -> MainMenu(
             penOnly = st.penOnly, palmReject = st.palmReject,
             onPenOnly = { st.penOnly = it; prefs.penOnly = it },
             onPalm = { st.palmReject = it; prefs.palmReject = it },
             onGrid = { dialog = EditorDialog.Grid },
             onResolution = { dialog = EditorDialog.Resolution },
             onOrganize = { dialog = EditorDialog.Organize },
-            onSoon = { soon(it) },
+            onImportImage = { dialog = null; imageLauncher.launch("image/*") },
+            onImportVideo = { dialog = null; videoLauncher.launch("video/*") },
+            onExportVideo = { dialog = null; videoExportLauncher.launch("$baseName.mp4") },
             onExportPng = { dialog = null; pngLauncher.launch("${baseName}_${st.project.currentFrame + 1}.png") },
             onExportSequence = { dialog = null; treeLauncher.launch(null) },
             onExportZip = { dialog = null; zipLauncher.launch("$baseName.zip") },
