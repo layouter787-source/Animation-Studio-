@@ -33,10 +33,11 @@ class ViewTransformTest {
         assertPoint(before, v.rotateAround(focus, 0.9f).screenToProject(focus))
     }
 
-    @Test fun zoomIsClampedToLimits() {
+    @Test fun zoomIsEssentiallyUnlimitedButBounded() {
         val v = ViewTransform()
-        assertEquals(ViewTransform.MAX_SCALE, v.zoomAround(Point(0f, 0f), 1000f).scale, 1e-4f)
-        assertEquals(ViewTransform.MIN_SCALE, v.zoomAround(Point(0f, 0f), 0.0001f).scale, 1e-4f)
+        assertEquals(1000f, v.zoomAround(Point(0f, 0f), 1000f).scale, 1e-2f)
+        assertEquals(ViewTransform.MAX_SCALE, v.zoomAround(Point(0f, 0f), 1e12f).scale, 1e-2f)
+        assertEquals(ViewTransform.MIN_SCALE, v.zoomAround(Point(0f, 0f), 0.0000001f).scale, 1e-4f)
     }
 
     @Test fun panOnlyChangesTranslation() {

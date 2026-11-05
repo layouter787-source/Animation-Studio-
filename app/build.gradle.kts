@@ -1,3 +1,9 @@
+import java.awt.RenderingHints
+import java.awt.image.BufferedImage
+import java.io.ByteArrayInputStream
+import java.util.Base64
+import javax.imageio.ImageIO
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
@@ -32,6 +38,13 @@ android {
         }
     }
 
+    // O primeiro plano do ícone do app é gerado em build/generated/icon-res a partir de icon/app_icon.b64.
+    sourceSets {
+        getByName("main") {
+            res.srcDir(layout.buildDirectory.dir("generated/icon-res"))
+        }
+    }
+
     signingConfigs {
         create("release") {
             val keystoreFile = System.getenv("ANDROID_KEYSTORE_FILE")
@@ -54,7 +67,12 @@ android {
     }
     kotlinOptions {
         jvmTarget = "17"
-        freeCompilerArgs += listOf("-opt-in=androidx.compose.ui.ExperimentalComposeUiApi")
+        // PointerInputChange.historical (traço suave) e combinedClickable são APIs experimentais.
+        freeCompilerArgs += listOf(
+            "-opt-in=androidx.compose.ui.ExperimentalComposeUiApi",
+            "-opt-in=androidx.compose.foundation.ExperimentalFoundationApi",
+            "-opt-in=androidx.compose.material3.ExperimentalMaterial3Api",
+        )
     }
 
     buildTypes {
@@ -65,6 +83,44 @@ android {
             }
         }
     }
+}
+
+// Ícone: lê o JPEG em base64 (icon/app_icon.b64) e escreve o PNG do primeiro plano do ícone adaptativo,
+// com a imagem a 78% da tela para não ser cortada pela máscara redonda/arredondada do launcher.
+// Se o ficheiro faltar ou estiver danificado, gera-se um quadrado liso para o build nunca falhar por isso.
+val generateLauncherIcon by tasks.registering {
+    val source = file("icon/app_icon.b64")
+    val outDir = layout.buildDirectory.dir("generated/icon-res")
+    inputs.files(source)
+    outputs.dir(outDir)
+    doLast {
+        System.setProperty("java.awt.headless", "true")
+        val size = 432
+        val out = BufferedImage(size, size, BufferedImage.TYPE_INT_ARGB)
+        try {
+            val bytes = Base64.getMimeDecoder().decode(source.readText().trim())
+            val img = ImageIO.read(ByteArrayInputStream(bytes)) ?: throw IllegalStateException("imagem inválida")
+            val target = (size * 0.78).toInt()
+            val g = out.createGraphics()
+            g.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_BICUBIC)
+            g.setRenderingHint(RenderingHints.KEY_RENDERING, RenderingHints.VALUE_RENDER_QUALITY)
+            g.drawImage(img, (size - target) / 2, (size - target) / 2, target, target, null)
+            g.dispose()
+        } catch (e: Exception) {
+            logger.warn("Ícone: não foi possível ler app_icon.b64 (${e.message}); a usar um ícone simples")
+            val g = out.createGraphics()
+            g.color = java.awt.Color(0x12, 0x20, 0x41)
+            g.fillRect(size / 8, size / 8, size * 3 / 4, size * 3 / 4)
+            g.dispose()
+        }
+        val dir = outDir.get().asFile.resolve("mipmap-xxxhdpi")
+        dir.mkdirs()
+        ImageIO.write(out, "png", dir.resolve("ic_launcher_foreground.png"))
+    }
+}
+
+tasks.named("preBuild") {
+    dependsOn(generateLauncherIcon)
 }
 
 dependencies {
@@ -79,4 +135,6 @@ dependencies {
     debugImplementation("androidx.compose.ui:ui-tooling")
 
     testImplementation("junit:junit:4.13.2")
+    // org.json real para testar a (des)serialização na JVM (o android.jar só tem stubs).
+    testImplementation("org.json:json:20240303")
 }
