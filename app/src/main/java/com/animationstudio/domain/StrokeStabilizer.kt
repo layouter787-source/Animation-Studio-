@@ -1,59 +1,68 @@
 package com.animationstudio.domain
 
-import kotlin.math.PI
+import kotlin.math.ceil
 import kotlin.math.hypot
 
 /**
- * Estabilizador de traço com filtro One Euro: remove o tremor quando o dedo anda devagar (corte baixo) e
- * deixa de atrasar quando anda depressa (o corte sobe com a velocidade). Trabalha em qualquer unidade;
- * a app aplica-o em pixels de ecrã. [strength] 0 = sem filtro; 1 = máximo.
+ * Smoothing "por corda" (como o Rough Animator): a ponta do pincel é puxada pelo dedo ou caneta por uma corda de
+ * comprimento fixo. Enquanto o dedo estiver dentro do comprimento da corda, a ponta não se mexe; quando se afasta,
+ * a corda estica e arrasta a ponta pelo caminho mais curto. Resultado: o tremor da mão (menor do que a corda)
+ * desaparece e as linhas saem limpas e continuas. Quanto maior a [strength] (0–1), mais comprida a corda.
+ *
+ * A corda mede-se em pixels de ecrã, por isso ao ampliar a folha o traço fica mais fino e preciso, como nas
+ * apps de animação. No fim do traço ([finish]) a ponta junta-se ao dedo num segmento reto em passos pequenos.
+ * Com [strength] = 0 devolve sempre o ponto bruto.
  */
 class StrokeStabilizer(strength: Float) {
-    private val s = strength.coerceIn(0f, 1f)
-    private val minCutoff = 10f - 9.5f * s
-    private val beta = 0.012f
-    private val dCutoff = 1f
-    private var x = 0f
-    private var y = 0f
-    private var dx = 0f
-    private var dy = 0f
-    private var lastT = -1L
+    private val ropePx = strength.coerceIn(0f, 1f) * ROPE_MAX_PX
+    private var px = 0f
+    private var py = 0f
 
-    private fun alpha(cutoff: Float, dt: Float): Float {
-        val tau = 1f / (2f * PI.toFloat() * cutoff)
-        return 1f / (1f + tau / dt)
+    fun start(raw: Point, timeMs: Long): Point {
+        px = raw.x
+        py = raw.y
+        return raw
     }
 
-    fun start(p: Point, tMs: Long = -1L): Point {
-        x = p.x
-        y = p.y
-        dx = 0f
-        dy = 0f
-        lastT = tMs
-        return p
+    fun next(raw: Point, timeMs: Long): Point {
+        if (ropePx < MIN_ROPE_PX) {
+            px = raw.x
+            py = raw.y
+            return raw
+        }
+        val dx = raw.x - px
+        val dy = raw.y - py
+        val d = hypot(dx, dy)
+        if (d > ropePx) {
+            val k = (d - ropePx) / d
+            px += dx * k
+            py += dy * k
+        }
+        return Point(px, py)
     }
 
-    fun next(raw: Point, tMs: Long = -1L): Point {
-        if (s <= 0.001f) return raw
-        val dt = if (tMs >= 0L && lastT >= 0L && tMs > lastT) ((tMs - lastT) / 1000f).coerceIn(0.002f, 0.1f) else 1f / 120f
-        if (tMs >= 0L) lastT = tMs
-        val ad = alpha(dCutoff, dt)
-        dx += ((raw.x - x) / dt - dx) * ad
-        dy += ((raw.y - y) / dt - dy) * ad
-        val a = alpha(minCutoff + beta * hypot(dx, dy), dt)
-        x += (raw.x - x) * a
-        y += (raw.y - y) * a
-        return Point(x, y)
-    }
-
-    /** Pontos para o traço alcançar o dedo no fim, sem salto. */
+    /** Pontos que levam a ponta até [raw], sem salto; o último é exatamente [raw]. */
     fun finish(raw: Point): List<Point> {
-        val out = ArrayList<Point>()
-        for (i in 0 until 80) {
-            out.add(next(raw))
-            if (hypot(raw.x - x, raw.y - y) < 0.5f) break
+        if (ropePx < MIN_ROPE_PX) return listOf(raw)
+        val dx = raw.x - px
+        val dy = raw.y - py
+        val d = hypot(dx, dy)
+        val steps = ceil(d / STEP_PX).toInt().coerceIn(1, MAX_STEPS)
+        val out = ArrayList<Point>(steps)
+        for (i in 1 until steps) {
+            val t = i.toFloat() / steps
+            out.add(Point(px + dx * t, py + dy * t))
         }
         out.add(raw)
+        px = raw.x
+        py = raw.y
         return out
+    }
+
+    private companion object {
+        const val ROPE_MAX_PX = 40f
+        const val MIN_ROPE_PX = 0.5f
+        const val STEP_PX = 3f
+        const val MAX_STEPS = 40
     }
 }
