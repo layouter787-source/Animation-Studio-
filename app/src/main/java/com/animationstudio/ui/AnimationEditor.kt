@@ -105,9 +105,11 @@ import com.animationstudio.domain.Point
 import com.animationstudio.domain.Project
 import com.animationstudio.domain.QuadTransform
 import com.animationstudio.domain.StrokeStabilizer
+import com.animationstudio.domain.Timing
 import com.animationstudio.domain.ViewTransform
 import com.animationstudio.domain.addFill
 import com.animationstudio.domain.frameClip
+import com.animationstudio.domain.importImages
 import com.animationstudio.domain.insertFrameAt
 import com.animationstudio.domain.moveLayer
 import com.animationstudio.domain.nextPlaybackStep
@@ -208,6 +210,16 @@ private suspend fun persist(store: ProjectStore, meta: ProjectMeta, fps: Int, pr
         }
     }
 
+private suspend fun persistTiming(store: ProjectStore, id: String, timing: Timing) {
+    withContext(Dispatchers.IO) {
+        try {
+            store.saveTiming(id, timing)
+        } catch (e: Exception) {
+            // o próximo guardar tenta de novo
+        }
+    }
+}
+
 /** Botão só com ícone, sobre a folha (laço): sem texto. */
 @Composable
 private fun OverlayIconChip(
@@ -263,6 +275,7 @@ fun AnimationEditor(meta: ProjectMeta, initial: Project, store: ProjectStore, on
     var refOffset by remember { mutableStateOf(Offset(40f, 120f)) }
     var refWidth by remember { mutableFloatStateOf(520f) }
     var refOpacity by remember { mutableFloatStateOf(0.85f) }
+    var timing by remember { mutableStateOf(store.loadTiming(meta.id)) }
     val scope = rememberCoroutineScope()
     val sw = sheetW.toFloat()
     val sh = sheetH.toFloat()
@@ -274,6 +287,7 @@ fun AnimationEditor(meta: ProjectMeta, initial: Project, store: ProjectStore, on
     fun close() {
         scope.launch {
             st.commitFloating()
+            persistTiming(store, meta.id, timing)
             if (!persist(store, curMeta, fps, st.project)) toast("Não foi possível guardar o projeto")
             onClose()
         }
@@ -358,12 +372,63 @@ fun AnimationEditor(meta: ProjectMeta, initial: Project, store: ProjectStore, on
             if (img == null) toast("Não foi possível abrir a imagem") else { refImage = img; refVisible = true }
         }
     }
+    // Importar imagem: entra como seleção flutuante na camada ativa, para ajustar (mover, escalar, rodar) e confirmar.
+    val imageLauncher = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
+        if (uri != null) scope.launch {
+            val layer = st.project.layers.firstOrNull { it.id == st.activeLayerId }
+            if (layer == null || !layer.visible) {
+                toast("Escolha uma camada visível para importar")
+                return@launch
+            }
+            val img = MediaImport.loadImage(context, uri, sheetW, sheetH)
+            if (img == null) {
+                toast("Não foi possível abrir a imagem")
+            } else {
+                st.selectTool(Tool.LASSO)
+                st.beginFloating(img, st.activeLayerId)
+                toast("Ajuste a imagem e confirme")
+            }
+        }
+    }
+    // Importar vídeo: um frame novo por imagem extraída, ao ritmo do projeto (até 150 frames).
+    val videoLauncher = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
+        if (uri != null) scope.launch {
+            val target = st.project.layers.firstOrNull { it.id == st.activeLayerId && it.kind == LayerKind.DRAWING }?.id
+                ?: st.project.layers.lastOrNull { it.kind == LayerKind.DRAWING }?.id
+            if (target == null) {
+                toast("Precisa de uma camada de desenho")
+                return@launch
+            }
+            toast("A importar frames…")
+            val frames = MediaImport.loadVideoFrames(context, uri, fps, sheetW, sheetH, 150)
+            if (frames.isEmpty()) {
+                toast("Não foi possível ler o vídeo")
+            } else {
+                st.commitFloating()
+                st.edit { it.importImages(target, frames) }
+                toast("${frames.size} frames importados")
+            }
+        }
+    }
+    val videoExportLauncher = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("video/mp4")) { uri ->
+        if (uri != null) scope.launch {
+            st.commitFloating()
+            toast("A exportar vídeo…")
+            val ok = VideoExporter.export(context, uri, st.project, timing, fps, sheetW, sheetH)
+            toast(if (ok) "Vídeo exportado" else "Falha ao exportar o vídeo")
+        }
+    }
 
     BackHandler { close() }
 
     LaunchedEffect(st.project, fps, sheetW, sheetH) {
         delay(400)
         if (!persist(store, curMeta, fps, st.project)) toast("Não foi possível guardar o projeto")
+    }
+
+    LaunchedEffect(timing) {
+        delay(300)
+        persistTiming(store, meta.id, timing)
     }
 
     LaunchedEffect(canvasSize) {
@@ -373,12 +438,14 @@ fun AnimationEditor(meta: ProjectMeta, initial: Project, store: ProjectStore, on
         }
     }
 
+    // Reprodução: cada frame fica visível tantos tempos quantos a sua duração.
     LaunchedEffect(st.playing, fps) {
         if (!st.playing) return@LaunchedEffect
         var dir = 1
         val interval = 1000L / fps.coerceAtLeast(1)
         while (st.playing) {
-            delay(interval)
+            delay(interval * timing.hold(st.project.currentFrameId))
+            if (!st.playing) break
             val step = nextPlaybackStep(st.project.currentFrame, st.project.frameCount, st.playMode, dir)
             dir = step.direction
             st.project = st.project.select(step.index)
@@ -396,8 +463,8 @@ fun AnimationEditor(meta: ProjectMeta, initial: Project, store: ProjectStore, on
     }
 
     val timelineBar: @Composable () -> Unit = {
-        TopBar(
-            st = st, sw = sheetW, sh = sheetH, expanded = expanded,
+        TimelineBar(
+            st = st, timing = timing, sw = sheetW, sh = sheetH, expanded = expanded,
             onMenu = { dialog = EditorDialog.Menu },
             onAdd = { dialog = EditorDialog.AddLayer },
             onCamera = { soon("Câmara") },
@@ -406,6 +473,7 @@ fun AnimationEditor(meta: ProjectMeta, initial: Project, store: ProjectStore, on
             onLayerOptions = { dialog = EditorDialog.LayerOptions(it.id) },
             onMoveLayer = { id, delta -> st.edit { p -> p.moveLayer(id, delta) } },
             onFrameOptions = { dialog = EditorDialog.FrameActions(it) },
+            onHold = { id, ticks -> timing = timing.withHold(id, ticks) },
             onGripEnd = onTimelineGrip,
             onSwatchDrag = { dragPos = it },
             onSwatchDrop = { p ->
@@ -828,14 +896,16 @@ fun AnimationEditor(meta: ProjectMeta, initial: Project, store: ProjectStore, on
 
     when (val d = dialog) {
         null -> {}
-        EditorDialog.Menu -> MenuPopup(
+        EditorDialog.Menu -> MainMenu(
             penOnly = st.penOnly, palmReject = st.palmReject,
             onPenOnly = { st.penOnly = it; prefs.penOnly = it },
             onPalm = { st.palmReject = it; prefs.palmReject = it },
             onGrid = { dialog = EditorDialog.Grid },
             onResolution = { dialog = EditorDialog.Resolution },
             onOrganize = { dialog = EditorDialog.Organize },
-            onSoon = { soon(it) },
+            onImportImage = { dialog = null; imageLauncher.launch("image/*") },
+            onImportVideo = { dialog = null; videoLauncher.launch("video/*") },
+            onExportVideo = { dialog = null; videoExportLauncher.launch("$baseName.mp4") },
             onExportPng = { dialog = null; pngLauncher.launch("${baseName}_${st.project.currentFrame + 1}.png") },
             onExportSequence = { dialog = null; treeLauncher.launch(null) },
             onExportZip = { dialog = null; zipLauncher.launch("$baseName.zip") },
