@@ -3,16 +3,19 @@ package com.animationstudio.data
 import android.content.Context
 import android.graphics.Bitmap
 import com.animationstudio.domain.Project
+import com.animationstudio.domain.Timing
 import java.io.File
 import java.io.FileOutputStream
 import java.nio.file.Files
 import java.nio.file.StandardCopyOption
 
-/** Guarda cada projeto em filesDir/projects/<id>.json (+ miniatura <id>.png) com escrita atómica. */
+/** Guarda cada projeto em filesDir/projects/<id>.json (+ miniatura <id>.png, durações <id>.timing) com escrita atómica. */
 class ProjectStore(context: Context) {
     private val dir = File(context.filesDir, "projects").apply { mkdirs() }
 
     private fun fileOf(id: String) = File(dir, "$id.json")
+
+    private fun timingFile(id: String) = File(dir, "$id.timing")
 
     fun thumbnailFile(id: String) = File(dir, "$id.png")
 
@@ -34,6 +37,20 @@ class ProjectStore(context: Context) {
         Files.move(tmp.toPath(), target.toPath(), StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE)
     }
 
+    /** Durações de frame (vazio se não existir ou estiver corrompido). */
+    fun loadTiming(id: String): Timing = try {
+        val f = timingFile(id)
+        if (f.exists()) TimingJson.decode(f.readText()) ?: Timing() else Timing()
+    } catch (e: Exception) {
+        Timing()
+    }
+
+    fun saveTiming(id: String, timing: Timing) {
+        val tmp = File(dir, "$id.timing.tmp")
+        tmp.writeText(TimingJson.encode(timing))
+        Files.move(tmp.toPath(), timingFile(id).toPath(), StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE)
+    }
+
     fun saveThumbnail(id: String, bitmap: Bitmap) {
         val tmp = File(dir, "$id.png.tmp")
         FileOutputStream(tmp).use { bitmap.compress(Bitmap.CompressFormat.PNG, 90, it) }
@@ -43,5 +60,6 @@ class ProjectStore(context: Context) {
     fun delete(id: String) {
         fileOf(id).delete()
         thumbnailFile(id).delete()
+        timingFile(id).delete()
     }
 }
