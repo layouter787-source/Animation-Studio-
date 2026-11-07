@@ -1,3 +1,4 @@
+import java.awt.Color
 import java.awt.RenderingHints
 import java.awt.image.BufferedImage
 import java.io.ByteArrayInputStream
@@ -89,7 +90,7 @@ val generateLauncherIcon by tasks.registering {
         } catch (e: Exception) {
             logger.warn("Ícone: não foi possível ler icon/app_icon_*.b64 (${e.message}); a usar um ícone simples")
             val g = out.createGraphics()
-            g.color = java.awt.Color(0x12, 0x20, 0x41)
+            g.color = Color(0x12, 0x20, 0x41)
             g.fillRect(size / 8, size / 8, size * 3 / 4, size * 3 / 4)
             g.dispose()
         }
