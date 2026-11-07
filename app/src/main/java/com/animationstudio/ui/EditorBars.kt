@@ -6,6 +6,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -18,6 +19,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -57,11 +59,23 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.animationstudio.domain.Layer
+import com.animationstudio.domain.extendHold
+import com.animationstudio.domain.holdEnd
+import com.animationstudio.domain.shrinkHold
 
 /** Cartão do estúdio: superfície azul escura com contorno fino e cantos arredondados. */
 internal fun Modifier.studioCard(radius: Dp = 14.dp): Modifier {
     val shape = RoundedCornerShape(radius)
     return this.clip(shape).background(StudioColors.Surface).border(1.dp, StudioColors.Outline, shape)
+}
+
+/**
+ * Estende ([steps] > 0) ou encurta ([steps] < 0) a duração do frame atual: frames que partilham o mesmo desenho.
+ * Cada passo é um passo no histórico (desfazer volta um frame).
+ */
+private fun EditorState.holdSteps(steps: Int) {
+    if (playing || steps == 0) return
+    edit { p -> if (steps > 0) p.extendHold(p.currentFrame, steps) else p.shrinkHold(p.currentFrame, -steps) }
 }
 
 @Composable
@@ -193,32 +207,59 @@ internal fun TopBar(
                     }
                 }
             }
-            Column(Modifier.weight(1f).horizontalScroll(hScroll)) {
-                for (l in rows) {
-                    Row(Modifier.height(rowH), verticalAlignment = Alignment.CenterVertically) {
-                        st.project.frameIds.forEachIndexed { i, fid ->
-                            val strokes = l.drawingAt(fid)?.strokes
-                            val isCurrent = i == st.project.currentFrame
-                            val shape = RoundedCornerShape(6.dp)
-                            Box(
-                                Modifier.padding(horizontal = 1.5.dp).size(width = cellW, height = cellH).clip(shape)
-                                    .background(if (strokes != null) Color.White else StudioColors.Surface2)
-                                    .border(if (isCurrent) 2.dp else 1.dp, if (isCurrent) StudioColors.Accent else StudioColors.Outline, shape)
-                                    .combinedClickable(
-                                        onClick = { st.activeLayerId = l.id; st.selectFrame(i) },
-                                        onLongClick = { st.activeLayerId = l.id; st.selectFrame(i); onFrameOptions(i) },
-                                    ),
-                            ) {
-                                if (strokes != null) {
-                                    Canvas(Modifier.fillMaxSize()) { drawThumbnail(strokes, sw.toFloat(), sh.toFloat()) }
+            Box(Modifier.weight(1f).horizontalScroll(hScroll)) {
+                Column {
+                    for (l in rows) {
+                        Row(Modifier.height(rowH), verticalAlignment = Alignment.CenterVertically) {
+                            st.project.frameIds.forEachIndexed { i, fid ->
+                                val strokes = l.drawingAt(fid)?.strokes
+                                val isCurrent = i == st.project.currentFrame
+                                val shape = RoundedCornerShape(6.dp)
+                                Box(
+                                    Modifier.padding(horizontal = 1.5.dp).size(width = cellW, height = cellH).clip(shape)
+                                        .background(if (strokes != null) Color.White else StudioColors.Surface2)
+                                        .border(if (isCurrent) 2.dp else 1.dp, if (isCurrent) StudioColors.Accent else StudioColors.Outline, shape)
+                                        .combinedClickable(
+                                            onClick = { st.activeLayerId = l.id; st.selectFrame(i) },
+                                            onLongClick = { st.activeLayerId = l.id; st.selectFrame(i); onFrameOptions(i) },
+                                        ),
+                                ) {
+                                    if (strokes != null) {
+                                        Canvas(Modifier.fillMaxSize()) { drawThumbnail(strokes, sw.toFloat(), sh.toFloat()) }
+                                    }
+                                    Text(
+                                        "${i + 1}",
+                                        style = StudioType.Caption.copy(fontSize = 8.sp, color = if (strokes != null) Color(0xFF30384F) else StudioColors.InkDim),
+                                        modifier = Modifier.align(Alignment.TopStart).padding(start = 3.dp, top = 1.dp),
+                                    )
                                 }
-                                Text(
-                                    "${i + 1}",
-                                    style = StudioType.Caption.copy(fontSize = 8.sp, color = if (strokes != null) Color(0xFF30384F) else StudioColors.InkDim),
-                                    modifier = Modifier.align(Alignment.TopStart).padding(start = 3.dp, top = 1.dp),
-                                )
                             }
                         }
+                    }
+                }
+                // Pega de duração: fica no fim da exposição do frame atual. Arrastar para a direita estende a duração
+                // (acrescenta frames que partilham o desenho); para a esquerda encurta.
+                if (!st.playing) {
+                    val proj = st.project
+                    val endIdx = proj.holdEnd(proj.currentFrame)
+                    val stepDp = cellW + 3.dp
+                    val stepPx = with(LocalDensity.current) { stepDp.toPx() }
+                    val activeRow = rows.indexOfFirst { it.id == st.activeLayerId }.coerceAtLeast(0)
+                    Box(
+                        Modifier.offset(x = stepDp * (endIdx + 1) - 11.dp, y = rowH * activeRow + (rowH - cellH) / 2f)
+                            .size(width = 10.dp, height = cellH).clip(RoundedCornerShape(4.dp)).background(StudioColors.Accent)
+                            .pointerInput(stepPx) {
+                                var acc = 0f
+                                detectHorizontalDragGestures(onDragStart = { acc = 0f }) { change, dx ->
+                                    change.consume()
+                                    acc += dx
+                                    while (acc >= stepPx) { st.holdSteps(1); acc -= stepPx }
+                                    while (acc <= -stepPx) { st.holdSteps(-1); acc += stepPx }
+                                }
+                            },
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Box(Modifier.size(width = 2.dp, height = cellH * 0.5f).background(Color.White.copy(alpha = 0.85f)))
                     }
                 }
             }
