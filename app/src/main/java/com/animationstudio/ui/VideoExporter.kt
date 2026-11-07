@@ -8,19 +8,18 @@ import android.media.MediaFormat
 import android.media.MediaMuxer
 import android.net.Uri
 import android.os.ParcelFileDescriptor
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asAndroidBitmap
+import com.animationstudio.domain.CameraMath
+import com.animationstudio.domain.CameraTrack
 import com.animationstudio.domain.Project
-import com.animationstudio.domain.Timing
-import com.animationstudio.domain.TimingMath
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlin.math.max
 import kotlin.math.min
 
 /**
- * Exporta MP4 (H.264): cada tempo da timeline (frames com a sua duração) é renderizado e entregue ao
- * codificador em buffers YUV com marca de tempo exata.
+ * Exporta MP4 (H.264): cada frame da timeline (a duração é feita de frames repetidos) é renderizado — visto pela
+ * câmara quando há keyframes — e entregue ao codificador em buffers YUV com marca de tempo exata.
  */
 internal object VideoExporter {
     private fun fillYuv(image: Image, px: IntArray, w: Int, h: Int) {
@@ -48,7 +47,7 @@ internal object VideoExporter {
         }
     }
 
-    suspend fun export(context: Context, uri: Uri, project: Project, timing: Timing, fps: Int, sw: Int, sh: Int): Boolean =
+    suspend fun export(context: Context, uri: Uri, project: Project, camera: CameraTrack, fps: Int, sw: Int, sh: Int): Boolean =
         withContext(Dispatchers.Default) {
             var codec: MediaCodec? = null
             var muxer: MediaMuxer? = null
@@ -112,18 +111,20 @@ internal object VideoExporter {
                 }
 
                 val ids = project.frameIds
-                val total = TimingMath.totalTicks(ids, timing)
+                val total = project.frameCount
                 val frameUs = 1_000_000L / fps
-                for (tick in 0 until total) {
-                    val fi = TimingMath.frameAtTick(ids, timing, tick)
-                    val bmp = renderComposite(project, fi, sw, sh, w, h, Color.White, useCache = false).asAndroidBitmap()
+                for (i in 0 until total) {
+                    val cam = if (!camera.isEmpty) {
+                        CameraMath.at(ids, camera, i.toFloat(), sw.toFloat(), sh.toFloat()).outputAffine(sw.toFloat(), sh.toFloat())
+                    } else null
+                    val bmp = renderCompositeWithCamera(project, i, sw, sh, w, h, cam).asAndroidBitmap()
                     val px = IntArray(w * h)
                     bmp.getPixels(px, 0, w, 0, 0, w, h)
                     val inIdx = nextInput()
                     if (inIdx < 0) return@withContext false
                     val image = enc.getInputImage(inIdx) ?: return@withContext false
                     fillYuv(image, px, w, h)
-                    enc.queueInputBuffer(inIdx, 0, w * h * 3 / 2, tick * frameUs, 0)
+                    enc.queueInputBuffer(inIdx, 0, w * h * 3 / 2, i * frameUs, 0)
                     drain(false)
                 }
                 val eos = nextInput()
