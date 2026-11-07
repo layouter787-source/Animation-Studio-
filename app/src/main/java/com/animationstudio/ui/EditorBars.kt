@@ -47,6 +47,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
@@ -146,6 +147,10 @@ internal fun TopBar(
     onSwatchDrop: (Offset) -> Unit,
     onSwatchCancel: () -> Unit,
     modifier: Modifier = Modifier,
+    /** Modo câmara ligado (realça o botão da câmara). */
+    cameraActive: Boolean = false,
+    /** Ids dos frames que têm keyframe de câmara (marcados com um losango âmbar). */
+    cameraKeys: Set<Long> = emptySet(),
 ) {
     val all = st.project.layers.asReversed()
     val rows = if (expanded) all else all.take(2)
@@ -232,6 +237,12 @@ internal fun TopBar(
                                         style = StudioType.Caption.copy(fontSize = 8.sp, color = if (strokes != null) Color(0xFF30384F) else StudioColors.InkDim),
                                         modifier = Modifier.align(Alignment.TopStart).padding(start = 3.dp, top = 1.dp),
                                     )
+                                    if (fid in cameraKeys) {
+                                        Box(
+                                            Modifier.align(Alignment.BottomStart).padding(start = 5.dp, bottom = 4.dp)
+                                                .size(7.dp).rotate(45f).background(StudioColors.Amber)
+                                        )
+                                    }
                                 }
                             }
                         }
@@ -266,7 +277,7 @@ internal fun TopBar(
         }
         Column(verticalArrangement = Arrangement.spacedBy(3.dp), horizontalAlignment = Alignment.End) {
             Row(horizontalArrangement = Arrangement.spacedBy(3.dp), verticalAlignment = Alignment.CenterVertically) {
-                ToolCell(width = 30.dp, height = 30.dp, onClick = onCamera) { Icon(Icons.Default.Videocam, "Câmara", tint = it, modifier = Modifier.size(17.dp)) }
+                ToolCell(width = 30.dp, height = 30.dp, selected = cameraActive, onClick = onCamera) { Icon(Icons.Default.Videocam, "Câmara", tint = it, modifier = Modifier.size(17.dp)) }
                 // Amostra da cor: toque abre o seletor; arrastar para a folha pinta a região onde se solta.
                 CheckerBox(
                     Color(st.colorArgb),
