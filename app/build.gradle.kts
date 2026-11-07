@@ -38,7 +38,7 @@ android {
         }
     }
 
-    // O primeiro plano do ícone do app é gerado em build/generated/icon-res a partir de icon/app_icon.b64.
+    // O primeiro plano do ícone do app é gerado em build/generated/icon-res a partir de icon/app_icon_*.b64.
     sourceSets {
         getByName("main") {
             res.srcDir(layout.buildDirectory.dir("generated/icon-res"))
@@ -64,20 +64,21 @@ android {
     }
 }
 
-// Ícone: lê o JPEG em base64 (icon/app_icon.b64) e escreve o PNG do primeiro plano do ícone adaptativo,
-// com a imagem a 78% da tela para não ser cortada pela máscara redonda/arredondada do launcher.
-// Se o ficheiro faltar ou estiver danificado, gera-se um quadrado liso para o build nunca falhar por isso.
+// Ícone: junta as partes em base64 (icon/app_icon_01.b64, 02, …) e descodifica o JPEG; escreve o PNG do primeiro
+// plano do ícone adaptativo, com a imagem a 78% da tela para não ser cortada pela máscara do launcher.
+// Se faltar ou estiver danificado, gera-se um quadrado liso para o build nunca falhar por isso.
 val generateLauncherIcon by tasks.registering {
-    val source = file("icon/app_icon.b64")
+    val parts = fileTree("icon") { include("app_icon_*.b64") }
     val outDir = layout.buildDirectory.dir("generated/icon-res")
-    inputs.files(source)
+    inputs.files(parts)
     outputs.dir(outDir)
     doLast {
         System.setProperty("java.awt.headless", "true")
         val size = 432
         val out = BufferedImage(size, size, BufferedImage.TYPE_INT_ARGB)
         try {
-            val bytes = Base64.getMimeDecoder().decode(source.readText().trim())
+            val text = parts.files.sortedBy { it.name }.joinToString("") { it.readText().trim() }
+            val bytes = Base64.getMimeDecoder().decode(text)
             val img = ImageIO.read(ByteArrayInputStream(bytes)) ?: throw IllegalStateException("imagem inválida")
             val target = (size * 0.78).toInt()
             val g = out.createGraphics()
@@ -86,7 +87,7 @@ val generateLauncherIcon by tasks.registering {
             g.drawImage(img, (size - target) / 2, (size - target) / 2, target, target, null)
             g.dispose()
         } catch (e: Exception) {
-            logger.warn("Ícone: não foi possível ler app_icon.b64 (${e.message}); a usar um ícone simples")
+            logger.warn("Ícone: não foi possível ler icon/app_icon_*.b64 (${e.message}); a usar um ícone simples")
             val g = out.createGraphics()
             g.color = java.awt.Color(0x12, 0x20, 0x41)
             g.fillRect(size / 8, size / 8, size * 3 / 4, size * 3 / 4)
