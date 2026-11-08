@@ -81,16 +81,17 @@ class ToolsDomainTest {
         assertEquals(1, p.strokesAt(dl, 0).size)
     }
 
-    @Test fun stabilizerLagsThenCatchesUp() {
+    @Test fun stabilizerRopeLagsThenCatchesUp() {
+        // Corda de 32 px (0,8 × 40): o dedo salta 100 px, a ponta fica atrás por um comprimento de corda.
         val st = StrokeStabilizer(0.8f)
-        st.start(Point(0f, 0f))
-        val p = st.next(Point(100f, 0f))
-        assertTrue(p.x in 0.1f..60f)
+        st.start(Point(0f, 0f), 0L)
+        val p = st.next(Point(100f, 0f), 8L)
+        assertTrue(p.x > 0.1f && p.x < 99f)
         val tail = st.finish(Point(100f, 0f))
         assertEquals(100f, tail.last().x, tol)
         val none = StrokeStabilizer(0f)
-        none.start(Point(0f, 0f))
-        assertEquals(100f, none.next(Point(100f, 0f)).x, tol)
+        none.start(Point(0f, 0f), 0L)
+        assertEquals(100f, none.next(Point(100f, 0f), 8L).x, tol)
     }
 
     @Test fun strokeShapeSamplesAndTapers() {
