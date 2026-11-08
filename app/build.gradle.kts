@@ -79,4 +79,6 @@ dependencies {
     debugImplementation("androidx.compose.ui:ui-tooling")
 
     testImplementation("junit:junit:4.13.2")
+    // org.json no Android existe no runtime, mas nos testes JVM é só um stub; precisamos da implementação real.
+    testImplementation("org.json:json:20240303")
 }
