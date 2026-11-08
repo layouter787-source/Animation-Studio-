@@ -34,7 +34,16 @@ internal class EditorState(initial: Project) {
     var project by mutableStateOf(initial)
     var history by mutableStateOf(History<Project>())
     var activeLayerId by mutableLongStateOf(initial.layers.lastOrNull { it.kind == LayerKind.DRAWING }?.id ?: initial.layers.last().id)
-    var view by mutableStateOf(ViewTransform())
+
+    private var viewState by mutableStateOf(ViewTransform())
+
+    /** Vista (zoom, rotação, posição). Cada mudança é também publicada em [StudioRender.view] para o desenho. */
+    var view: ViewTransform
+        get() = viewState
+        set(v) {
+            viewState = v
+            StudioRender.view = v
+        }
     var fitted = false
 
     var tool by mutableStateOf(Tool.BRUSH)
