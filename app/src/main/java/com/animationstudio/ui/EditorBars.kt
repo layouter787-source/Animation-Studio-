@@ -189,6 +189,7 @@ internal fun TopBar(
                     val isActive = l.id == st.activeLayerId
                     val chipShape = RoundedCornerShape(8.dp)
                     // Sem pontos coloridos: a camada ativa distingue-se só pelo fundo e pelo contorno.
+                    // Tocar numa camada que já está ativa abre as opções dela (visibilidade, opacidade, nome, apagar).
                     Row(
                         Modifier.height(rowH).padding(vertical = 1.dp, horizontal = 1.dp).fillMaxWidth().clip(chipShape)
                             .background(if (isActive) StudioColors.AccentSoft else StudioColors.Surface2)
@@ -201,7 +202,7 @@ internal fun TopBar(
                                     if (acc > rowPx) { curMove(l.id, -1); acc = 0f } else if (acc < -rowPx) { curMove(l.id, 1); acc = 0f }
                                 }
                             }
-                            .combinedClickable(onClick = { st.activeLayerId = l.id }, onLongClick = { onLayerOptions(l) })
+                            .clickable { if (isActive) onLayerOptions(l) else st.activeLayerId = l.id }
                             .padding(horizontal = 9.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
@@ -220,14 +221,19 @@ internal fun TopBar(
                                 val strokes = l.drawingAt(fid)?.strokes
                                 val isCurrent = i == st.project.currentFrame
                                 val shape = RoundedCornerShape(6.dp)
+                                // Tocar num frame que já está selecionado (na mesma camada) abre as opções do frame.
                                 Box(
                                     Modifier.padding(horizontal = 1.5.dp).size(width = cellW, height = cellH).clip(shape)
                                         .background(if (strokes != null) Color.White else StudioColors.Surface2)
                                         .border(if (isCurrent) 2.dp else 1.dp, if (isCurrent) StudioColors.Accent else StudioColors.Outline, shape)
-                                        .combinedClickable(
-                                            onClick = { st.activeLayerId = l.id; st.selectFrame(i) },
-                                            onLongClick = { st.activeLayerId = l.id; st.selectFrame(i); onFrameOptions(i) },
-                                        ),
+                                        .clickable {
+                                            if (isCurrent && st.activeLayerId == l.id) {
+                                                onFrameOptions(i)
+                                            } else {
+                                                st.activeLayerId = l.id
+                                                st.selectFrame(i)
+                                            }
+                                        },
                                 ) {
                                     if (strokes != null) {
                                         Canvas(Modifier.fillMaxSize()) { drawThumbnail(strokes, sw.toFloat(), sh.toFloat()) }
