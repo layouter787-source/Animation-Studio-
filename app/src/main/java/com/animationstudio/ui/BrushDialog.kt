@@ -19,6 +19,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.Button
@@ -42,6 +43,8 @@ import androidx.compose.ui.graphics.CompositingStrategy
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
@@ -54,15 +57,35 @@ import kotlin.math.exp
 import kotlin.math.ln
 import kotlin.math.roundToInt
 
-private val SizeLog = ln(BrushLimits.MAX_SIZE)
+/** Menor tamanho de pincel: 0,1 px (linhas finas como fios). O máximo é [BrushLimits.MAX_SIZE] = 2000 px. */
+private const val SizeMin = 0.1f
+
+private val SizeLogMin = ln(SizeMin)
+private val SizeLogSpan = ln(BrushLimits.MAX_SIZE) - ln(SizeMin)
 
 /** Menus e janelas ficam 20% transparentes. */
 private val PopupAlpha = 0.8f
 
-/** Tamanho (1–2000 px) numa escala logarítmica: o controlo fino fica nos tamanhos pequenos. */
-private fun sizeFromSlider(t: Float): Float = exp(t.coerceIn(0f, 1f) * SizeLog).coerceIn(BrushLimits.MIN_SIZE, BrushLimits.MAX_SIZE)
+/** Arredonda ao passo natural: décimas até 100 px, inteiros acima. */
+private fun roundSize(v: Float): Float {
+    val c = v.coerceIn(SizeMin, BrushLimits.MAX_SIZE)
+    return if (c < 100f) ((c * 10f).roundToInt() / 10f).coerceAtLeast(SizeMin) else c.roundToInt().toFloat()
+}
 
-private fun sliderFromSize(s: Float): Float = (ln(s.coerceIn(BrushLimits.MIN_SIZE, BrushLimits.MAX_SIZE)) / SizeLog).coerceIn(0f, 1f)
+/** Tamanho (0,1–2000 px) numa escala logarítmica: o controlo fino fica nos tamanhos pequenos. */
+private fun sizeFromSlider(t: Float): Float = roundSize(exp(SizeLogMin + t.coerceIn(0f, 1f) * SizeLogSpan))
+
+private fun sliderFromSize(s: Float): Float = ((ln(s.coerceIn(SizeMin, BrushLimits.MAX_SIZE)) - SizeLogMin) / SizeLogSpan).coerceIn(0f, 1f)
+
+/** Texto do tamanho: "0.3", "1.5", "2", "150". */
+private fun fmtSize(v: Float): String {
+    if (v >= 100f) return v.roundToInt().toString()
+    val r = (v * 10f).roundToInt() / 10f
+    return if (r == r.toInt().toFloat()) r.toInt().toString() else r.toString()
+}
+
+/** Passo dos botões − e +: 0,1 até 10 px, 1 até 100 px, 10 acima. */
+private fun sizeStep(v: Float): Float = if (v < 10f) 0.1f else if (v < 100f) 1f else 10f
 
 @Composable
 private fun StudioSlider(value: Float, onChange: (Float) -> Unit) {
@@ -85,7 +108,8 @@ private fun ToggleRow(label: String, checked: Boolean, onChange: (Boolean) -> Un
 
 /**
  * Biblioteca de pincéis/borrachas (como no esboço): aba, pesquisa, categorias e lista com pré-visualização
- * renderizada. Os três pontos de cada linha abrem o tamanho e a opacidade dessa predefinição.
+ * renderizada. Tocar num pincel escolhe-o e abre logo as definições dele (tamanho, opacidade, suavização,
+ * smoothing, pontas); os três pontos fazem o mesmo.
  */
 @Composable
 internal fun BrushLibraryDialog(
@@ -168,7 +192,7 @@ internal fun BrushLibraryDialog(
                                     Modifier.fillMaxWidth().height(46.dp).clip(RoundedCornerShape(10.dp))
                                         .background(if (sel) StudioColors.AccentSoft else StudioColors.Surface2)
                                         .border(1.dp, if (sel) StudioColors.Accent else StudioColors.Outline, RoundedCornerShape(10.dp))
-                                        .clickable { onSelect(p) },
+                                        .clickable { onSettings(p) },
                                     verticalAlignment = Alignment.CenterVertically,
                                 ) {
                                     Canvas(
@@ -193,8 +217,8 @@ internal fun BrushLibraryDialog(
 }
 
 /**
- * Definições do pincel em uso (duplo toque): tamanho 1–2000 px, opacidade, suavização, estabilizador, modo de
- * desenho, pontas afinadas (opcional) e pixelização (opcional).
+ * Definições do pincel em uso: tamanho de 0,1 a 2000 px (escrito, com slider ou com −/+), opacidade, suavização,
+ * smoothing por corda, modo de desenho, pontas afinadas (opcional) e pixelização (opcional, desligada por defeito).
  */
 @Composable
 internal fun BrushSettingsDialog(
@@ -216,6 +240,12 @@ internal fun BrushSettingsDialog(
     val prefs = Prefs(LocalContext.current)
     var taper by remember { mutableStateOf(StudioRender.taperEnds) }
     var pixelated by remember { mutableStateOf(StudioRender.pixelated) }
+    var sizeText by remember(preset.id) { mutableStateOf(fmtSize(size)) }
+    fun setSize(v: Float) {
+        val r = roundSize(v)
+        onSize(r)
+        sizeText = fmtSize(r)
+    }
     Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
         Surface(
             color = StudioColors.Surface.copy(alpha = PopupAlpha), shape = shape,
@@ -246,11 +276,40 @@ internal fun BrushSettingsDialog(
                     ToggleRow("PIXELADO (SEM ANTI-ALIASING)", pixelated) { pixelated = it; prefs.pixelated = it }
                 }
                 Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(0.dp)) {
-                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                        Text("TAMANHO", style = StudioType.Caption)
-                        Text("${size.roundToInt()} px", style = StudioType.Number)
+                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Text("TAMANHO", style = StudioType.Caption, modifier = Modifier.weight(1f))
+                        Box(
+                            Modifier.size(24.dp).clip(RoundedCornerShape(7.dp)).background(StudioColors.Surface2)
+                                .border(1.dp, StudioColors.Outline, RoundedCornerShape(7.dp)).clickable { setSize(size - sizeStep(size - 0.01f)) },
+                            contentAlignment = Alignment.Center,
+                        ) { Text("−", style = StudioType.Label.copy(fontSize = 14.sp)) }
+                        Box(
+                            Modifier.width(56.dp).height(26.dp).clip(RoundedCornerShape(7.dp)).background(StudioColors.Surface2)
+                                .border(1.dp, StudioColors.Outline, RoundedCornerShape(7.dp)).padding(horizontal = 4.dp),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            BasicTextField(
+                                value = sizeText,
+                                onValueChange = { raw ->
+                                    val t = raw.replace(',', '.').filter { c -> c.isDigit() || c == '.' }.take(7)
+                                    sizeText = t
+                                    val v = t.toFloatOrNull()
+                                    if (v != null && v > 0f) onSize(roundSize(v))
+                                },
+                                singleLine = true,
+                                textStyle = StudioType.Number.copy(fontSize = 12.sp, textAlign = TextAlign.Center),
+                                cursorBrush = SolidColor(StudioColors.Accent),
+                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                            )
+                        }
+                        Text("px", style = StudioType.Caption)
+                        Box(
+                            Modifier.size(24.dp).clip(RoundedCornerShape(7.dp)).background(StudioColors.Surface2)
+                                .border(1.dp, StudioColors.Outline, RoundedCornerShape(7.dp)).clickable { setSize(size + sizeStep(size)) },
+                            contentAlignment = Alignment.Center,
+                        ) { Text("+", style = StudioType.Label.copy(fontSize = 14.sp)) }
                     }
-                    StudioSlider(sliderFromSize(size)) { onSize(sizeFromSlider(it)) }
+                    StudioSlider(sliderFromSize(size)) { setSize(sizeFromSlider(it)) }
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                         Text("OPACIDADE", style = StudioType.Caption)
                         Text("${(opacity * 100).roundToInt()}%", style = StudioType.Number)
@@ -262,8 +321,8 @@ internal fun BrushSettingsDialog(
                     }
                     StudioSlider(smoothing, onSmoothing)
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                        Text("ESTABILIZADOR", style = StudioType.Caption)
-                        Text("${(stabilizer * 100).roundToInt()}%", style = StudioType.Number)
+                        Text("SMOOTHING (CORDA)", style = StudioType.Caption)
+                        Text("${(stabilizer * 40f).roundToInt()} px", style = StudioType.Number)
                     }
                     StudioSlider(stabilizer, onStabilizer)
                     Spacer(Modifier.height(4.dp))
