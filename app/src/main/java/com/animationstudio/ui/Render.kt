@@ -68,9 +68,10 @@ import kotlin.math.sin
 // cima (papel, tela, madeira, pedra, nuvem, couro, areia, grunge, metal, concreto).
 // A borracha NUNCA pinta de branco: usa composição DstOut (remove a opacidade do que existe na camada).
 //
-// DESEMPENHO: no editor, cada camada de cada frame é rasterizada UMA vez para uma imagem (ver [rasterFor]) e o ecrã só
-// junta essas imagens. Um traço novo é acrescentado à imagem existente (custo constante), em vez de redesenhar todos
-// os traços a cada imagem do ecrã. As exportações e o balde continuam a usar o desenho vetorial completo.
+// DESEMPENHO E NITIDEZ: no editor, cada camada de cada frame é rasterizada UMA vez para uma imagem (ver [rasterFor]) e
+// o ecrã só junta essas imagens. Isso só se usa enquanto a folha não está ampliada para além da resolução da imagem:
+// com mais zoom volta o desenho vetorial (sempre nítido, sem pixelização nem desfoque), e só se desenha o que está
+// dentro do ecrã. As exportações e o balde usam sempre o desenho vetorial completo.
 // ---------------------------------------------------------------------------------------------
 
 private class InkPass(val width: Float, val alpha: Float, val body: Path?, val polys: List<Path>, val tips: List<Pair<Offset, Float>>)
@@ -182,6 +183,32 @@ private fun rasterFor(layerId: Long, frameId: Long, strokes: List<BrushStroke>, 
         }
     }
     return next
+}
+
+/**
+ * Só os traços que tocam a área visível do ecrã (com uma margem pela espessura e pelos carimbos). Usado quando a folha
+ * está ampliada e se desenha em vetor: traços fora do ecrã não custam nada. Preenchimentos e imagens ficam sempre.
+ */
+private fun DrawScope.cullStrokes(strokes: List<BrushStroke>): List<BrushStroke> {
+    if (strokes.size < 30) return strokes
+    val w = size.width
+    val h = size.height
+    if (w <= 0f || h <= 0f) return strokes
+    val v = StudioRender.view
+    val c = listOf(
+        v.screenToProject(Point(0f, 0f)), v.screenToProject(Point(w, 0f)),
+        v.screenToProject(Point(0f, h)), v.screenToProject(Point(w, h)),
+    )
+    val minX = c.minOf { it.x }
+    val maxX = c.maxOf { it.x }
+    val minY = c.minOf { it.y }
+    val maxY = c.maxOf { it.y }
+    return strokes.filter { s ->
+        if (s.fill != null || s.image != null || s.points.isEmpty()) return@filter true
+        val b = s.bounds() ?: return@filter true
+        val pad = s.width * 2f + 8f
+        b.maxX + pad >= minX && b.minX - pad <= maxX && b.maxY + pad >= minY && b.minY - pad <= maxY
+    }
 }
 
 private fun polyPath(poly: List<Point>): Path {
@@ -1146,7 +1173,9 @@ internal fun DrawScope.drawElements(
 /**
  * Camadas de um frame, de baixo para cima, cada uma isolada (opacidade da camada e borracha só afetam a própria).
  * [kind] filtra por tipo de camada (null = todas). [live] é o traço em curso, desenhado na camada [liveLayerId].
- * Com [useCache] (editor) cada camada vem da imagem em cache; sem ele (exportação, balde) desenha-se tudo em vetor.
+ * Com [useCache] (editor): até ao zoom em que a imagem em cache ainda tem resolução suficiente a camada vem da
+ * imagem (rápido); com mais zoom desenha-se em vetor, sempre nítido, só com os traços que estão no ecrã.
+ * Sem [useCache] (exportação, balde) desenha-se tudo em vetor.
  */
 internal fun DrawScope.drawFrameLayers(
     project: Project,
@@ -1162,6 +1191,9 @@ internal fun DrawScope.drawFrameLayers(
     selected: Set<Int>? = null,
     selTransform: ((DrawTransform) -> Unit)? = null,
 ) {
+    // Resolução da imagem em cache, em pixels por unidade da folha, e zoom a partir do qual ficaria pixelizada.
+    val rasterScale = min(1f, RASTER_MAX_SIDE.toFloat() / max(sw, sh))
+    val cleanZoom = StudioRender.view.scale <= rasterScale * 1.02f
     for (l in project.layers) {
         if (!l.visible) continue
         if (kind != null && l.kind != kind) continue
@@ -1171,7 +1203,7 @@ internal fun DrawScope.drawFrameLayers(
         val paint = Paint()
         paint.alpha = l.opacityPercent / 100f
         drawContext.canvas.saveLayer(Rect(0f, 0f, sw, sh), paint)
-        val cacheable = useCache && strokes.isNotEmpty() && (selected == null || l.id != selLayerId)
+        val cacheable = useCache && cleanZoom && strokes.isNotEmpty() && (selected == null || l.id != selLayerId)
         if (cacheable) {
             val r = rasterFor(l.id, frameId, strokes, sw.roundToInt(), sh.roundToInt())
             val filter = if (tint != null) ColorFilter.tint(tint, BlendMode.SrcIn) else null
@@ -1181,7 +1213,8 @@ internal fun DrawScope.drawFrameLayers(
                 colorFilter = filter, filterQuality = FilterQuality.Medium,
             )
         } else {
-            drawElements(strokes, tint, useCache, if (l.id == selLayerId) selected else null, selTransform)
+            val shown = if (useCache && selected == null) cullStrokes(strokes) else strokes
+            drawElements(shown, tint, useCache, if (l.id == selLayerId) selected else null, selTransform)
         }
         if (live != null && hasLive) drawElement(live, tint, false)
         drawContext.canvas.restore()
