@@ -135,4 +135,57 @@ object StampGeometry {
         }
         return out
     }
+
+    /**
+     * Toques de um lápis realista. Cada toque tem posição e tamanho ligeiramente irregulares ([jitter], como a ponta
+     * de grafite que não é perfeita) e a opacidade sobe suavemente nas pontas: o traço começa e acaba esbatido, como
+     * quando o lápis pousa e levanta do papel, sem afinar a espessura. [fadeFactor] é o comprimento do esbatido em
+     * múltiplos da espessura e [minAlpha] a opacidade na ponta. Determinístico para a mesma [seed].
+     */
+    fun penDabs(
+        points: List<Point>,
+        width: Float,
+        spacingFrac: Float,
+        fadeFactor: Float,
+        minAlpha: Float,
+        jitter: Float,
+        seed: Int,
+    ): List<Stamp> {
+        val out = ArrayList<Stamp>()
+        if (points.isEmpty()) return out
+        if (points.size < 2) {
+            out.add(Stamp(points[0].x, points[0].y, width, 0f, 1f))
+            return out
+        }
+        val rnd = java.util.Random(seed.toLong())
+        val spacing = max(0.7f, width * spacingFrac)
+        val s = StrokeGeometry.sample(points, max(0.4f, spacing / 2f))
+        var total = 0f
+        for (i in 1 until s.size) total += hypot(s[i].x - s[i - 1].x, s[i].y - s[i - 1].y)
+        val fadeLen = min(total / 2f, width * fadeFactor)
+        val lo = minAlpha.coerceIn(0f, 1f)
+        var next = 0f
+        var travelled = 0f
+        for (i in 1 until s.size) {
+            val a = s[i - 1]
+            val b = s[i]
+            val seg = hypot(b.x - a.x, b.y - a.y)
+            if (seg == 0f) continue
+            val tx = (b.x - a.x) / seg
+            val ty = (b.y - a.y) / seg
+            val ang = atan2(ty, tx)
+            while (next <= travelled + seg) {
+                val d = next - travelled
+                val edge = min(next, total - next)
+                val alpha = if (fadeLen <= 0f) 1f else lo + (1f - lo) * smooth(edge / fadeLen)
+                val lat = (rnd.nextFloat() - 0.5f) * 2f * jitter * width * 0.5f
+                val size = width * (1f + (rnd.nextFloat() - 0.5f) * 2f * jitter)
+                out.add(Stamp(a.x + tx * d - ty * lat, a.y + ty * d + tx * lat, max(0.5f, size), ang, alpha))
+                next += spacing
+                if (out.size >= MAX_STAMPS) return out
+            }
+            travelled += seg
+        }
+        return out
+    }
 }

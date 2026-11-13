@@ -39,6 +39,7 @@ enum class GrainKind { PAPER, CANVAS, WOOD, STONE, CLOUD, LEATHER, SAND, GRUNGE,
  *  - contínuo (por defeito): espessura uniforme, pontas redondas;
  *  - [soft]: toques redondos suaves (aerógrafo, aguarela, brilho) com a dureza [hardness];
  *  - cerdas (ver [BrushDynamics]): toques com padrão de cerdas (óleo, acrílico, leque);
+ *  - lápis (ver [BrushDynamics.pencil]): grafite que se acumula, borda esfumada e pontas esbatidas;
  *  - [lines] > 1: linhas paralelas (só borrachas de cerdas);
  *  - [stamp]: carimbos — já não fazem parte da biblioteca (só pincéis com comportamento próprio).
  * [grain] > 0 aplica a textura [texture] (papel, tela, madeira, pedra…) ao traço, como num material real.
@@ -101,6 +102,9 @@ object BrushLibrary {
     const val ANIM = "Animação e conceito"
     const val DOTS = "Pontilhismo"
     const val ERASERS = "Borrachas"
+
+    /** Categoria dos pincéis que o utilizador importa de imagens (PNG ou com transparência). */
+    const val CUSTOM = "Meus pincéis"
 
     private val allCategories = listOf(
         SKETCH, INK, LINEART, COMICS, MARKER, AIR, WATER, PAINT, BLOTS, TEXTURES, SHADOW, HAIR, LIGHT, COLORFX,
@@ -256,7 +260,7 @@ object BrushLibrary {
 
     /**
      * Biblioteca final: só pincéis procedurais, cada um com o seu comportamento (contínuo com textura, toques suaves,
-     * cerdas). Retirados: todos os carimbos (árvores, relva, folhas, formas, padrões…) e os de listras paralelas
+     * cerdas, lápis). Retirados: todos os carimbos (árvores, relva, folhas, formas, padrões…) e os de listras paralelas
      * (linha múltipla, hachuras…). Os de cerdas (óleo, acrílico…) usam o motor de cerdas ([BrushDynamics]).
      */
     val all: List<BrushPreset> = (core + BrushCatalog.presets).filterNot {
@@ -267,18 +271,31 @@ object BrushLibrary {
     /** Só as categorias que ainda têm pincéis. */
     val brushCategories: List<String> = allCategories.filter { c -> all.any { it.kind == BrushKind.BRUSH && it.category == c } }
 
-    fun byIdOrNull(id: String): BrushPreset? = all.firstOrNull { it.id == id }
+    @Volatile
+    private var customList: List<BrushPreset> = emptyList()
+
+    /** Pincéis importados pelo utilizador (ver a importação de PNG no editor). */
+    val custom: List<BrushPreset> get() = customList
+
+    /** Define os pincéis importados; passam a aparecer na categoria [CUSTOM]. */
+    fun setCustom(list: List<BrushPreset>) {
+        customList = list
+    }
+
+    fun byIdOrNull(id: String): BrushPreset? = all.firstOrNull { it.id == id } ?: customList.firstOrNull { it.id == id }
     fun byId(id: String): BrushPreset = byIdOrNull(id) ?: all.first()
     fun ofKind(kind: BrushKind): List<BrushPreset> = all.filter { it.kind == kind }
-    fun categoriesOf(kind: BrushKind): List<String> = if (kind == BrushKind.BRUSH) brushCategories else eraserCategories
+    fun categoriesOf(kind: BrushKind): List<String> =
+        if (kind == BrushKind.BRUSH) brushCategories + (if (customList.isNotEmpty()) listOf(CUSTOM) else emptyList()) else eraserCategories
 
     private fun norm(s: String): String =
         Normalizer.normalize(s.lowercase(), Normalizer.Form.NFD).replace(Regex("\\p{Mn}+"), "")
 
-    /** Pesquisa por nome, categoria ou palavras-chave, sem diferenciar acentos nem maiúsculas. */
+    /** Pesquisa por nome, categoria ou palavras-chave, sem diferenciar acentos nem maiúsculas (inclui os importados). */
     fun search(kind: BrushKind, query: String, category: String?): List<BrushPreset> {
         val q = norm(query.trim())
-        return all.filter {
+        val pool = if (kind == BrushKind.BRUSH) all + customList else all
+        return pool.filter {
             it.kind == kind && (category == null || it.category == category) &&
                 (q.isEmpty() || norm(it.name + " " + it.category + " " + it.keywords).contains(q))
         }
