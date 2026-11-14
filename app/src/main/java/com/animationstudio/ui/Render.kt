@@ -62,10 +62,11 @@ import kotlin.math.roundToInt
 import kotlin.math.sin
 
 // ---------------------------------------------------------------------------------------------
-// Traços. Motores: contínuo (espessura uniforme, pontas redondas), toques suaves (aerógrafo/aguarela),
-// cerdas (óleo, acrílico, leque: toques com padrão de cerdas rodado pela direção do traço), linhas paralelas
-// (borrachas de cerdas), carimbos (motor mantido, sem pincéis na biblioteca) e textura procedural aplicada por
-// cima (papel, tela, madeira, pedra, nuvem, couro, areia, grunge, metal, concreto).
+// Traços. Motores: contínuo (espessura uniforme, pontas redondas), lápis realista (grafite que se acumula, borda
+// esfumada, pontas esbatidas), toques suaves (aerógrafo/aguarela), cerdas (óleo, acrílico, leque: toques com padrão
+// de cerdas rodado pela direção do traço), pontas importadas de imagens do utilizador, linhas paralelas (borrachas
+// de cerdas), carimbos (motor mantido, sem pincéis na biblioteca) e textura procedural aplicada por cima (papel,
+// tela, madeira, pedra, nuvem, couro, areia, grunge, metal, concreto).
 // A borracha NUNCA pinta de branco: usa composição DstOut (remove a opacidade do que existe na camada).
 //
 // DESEMPENHO E NITIDEZ: no editor, cada camada de cada frame é rasterizada UMA vez para uma imagem (ver [rasterFor]) e
@@ -95,6 +96,8 @@ private class InkRender(
     val bristleVariant: Int = 0,
     /** Carimbos da natureza com várias cores (árvore, galho, relva). */
     val tinted: List<TintBucket>? = null,
+    /** Ponta importada de uma imagem do utilizador (máscara branca com transparência). */
+    val tip: ImageBitmap? = null,
 )
 
 private val dabCache = ConcurrentHashMap<Int, ImageBitmap>()
@@ -673,6 +676,17 @@ private fun buildNatureStamps(s: BrushStroke, preset: BrushPreset, nature: Natur
 }
 
 private fun buildInk(s: BrushStroke): InkRender {
+    // Pincel importado de uma imagem do utilizador: a imagem é a ponta, carimbada ao longo do traço.
+    val custom = CustomBrushes.find(s.brush)
+    if (custom != null) {
+        val tipImage = CustomBrushes.tip(custom.id)
+        if (tipImage != null) {
+            return InkRender(
+                emptyList(), null, StampGeometry.dabs(s.points, s.width, 0f, custom.spacing), 1f, 1f, null, 0f, GrainKind.PAPER,
+                tip = tipImage,
+            )
+        }
+    }
     val preset = if (s.brush.isNotEmpty()) BrushLibrary.byIdOrNull(s.brush) else null
     val grain = preset?.grain ?: 0f
     val gk = preset?.texture ?: GrainKind.PAPER
@@ -689,6 +703,13 @@ private fun buildInk(s: BrushStroke): InkRender {
         if (br > 0f) {
             val variant = (((seedOf(s) % 6L) + 6L) % 6L).toInt()
             return InkRender(emptyList(), null, StampGeometry.dabs(s.points, s.width, 0f, 0.06f), 0.5f, 0.7f, null, grain, gk, br, variant)
+        }
+        // Lápis realista: grafite que se acumula toque a toque, borda esfumada (dureza), ponta irregular e pontas
+        // que começam e acabam esbatidas, sem afinar a espessura. O grão do papel corta o grafite nos vales.
+        val pen = BrushDynamics.pencil(preset)
+        if (pen != null) {
+            val dabs = StampGeometry.penDabs(s.points, s.width, pen.spacing, pen.fade, 0.25f, pen.jitter, seedOf(s).toInt())
+            return InkRender(emptyList(), null, dabs, pen.hardness, pen.flow, null, grain, gk)
         }
     }
     if (preset != null && preset.soft) {
@@ -978,13 +999,14 @@ private fun DrawScope.drawPass(p: InkPass, rgb: Color, blend: BlendMode) {
     for (t in p.tips) dot(c, t.second, t.first, blend)
 }
 
+/** Toques redondos; cada um tem a sua opacidade ([Stamp.alpha], usada pelo esbatido nas pontas do lápis). */
 private fun DrawScope.drawDabs(dabs: List<Stamp>, hardness: Float, flow: Float, rgb: Color, blend: BlendMode) {
     val img = dabImage(hardness)
     val filter = ColorFilter.tint(rgb, BlendMode.SrcIn)
     for (d in dabs) {
         val k = d.size / 64f
         withTransform({ translate(d.x - d.size / 2f, d.y - d.size / 2f); scale(k, k, Offset.Zero) }) {
-            drawImage(img, alpha = flow, colorFilter = filter, blendMode = blend)
+            drawImage(img, alpha = flow * d.alpha, colorFilter = filter, blendMode = blend)
         }
     }
 }
@@ -1007,6 +1029,24 @@ private fun DrawScope.drawBristleDabs(dabs: List<Stamp>, variant: Int, amount: F
     }
 }
 
+/** Pontas importadas: a imagem do utilizador carimbada ao longo do traço, rodada pela direção dele. */
+private fun DrawScope.drawTipDabs(dabs: List<Stamp>, tip: ImageBitmap, rgb: Color, blend: BlendMode) {
+    val filter = ColorFilter.tint(rgb, BlendMode.SrcIn)
+    val side = max(tip.width, tip.height).toFloat()
+    for (d in dabs) {
+        val k = d.size / side
+        val deg = d.rotation * 180f / PI.toFloat()
+        withTransform({
+            translate(d.x, d.y)
+            rotate(deg, Offset.Zero)
+            translate(-d.size / 2f, -d.size / 2f)
+            scale(k, k, Offset.Zero)
+        }) {
+            drawImage(tip, colorFilter = filter, blendMode = blend)
+        }
+    }
+}
+
 /** Tom da cor: negativo escurece (mistura com preto), positivo clareia (mistura com branco). */
 private fun shaded(c: Color, f: Float): Color = if (f < 0f) lerp(c, Color.Black, -f) else lerp(c, Color.White, f * 0.8f)
 
@@ -1016,13 +1056,15 @@ private fun DrawScope.drawRender(r: InkRender, rgb: Color, blend: BlendMode, mon
     val lines = r.lines
     val buckets = r.stampBuckets
     val tinted = r.tinted
+    val tipImage = r.tip
     if (tinted != null) {
         for (b in tinted) {
             val col = if (mono) rgb else (b.fixed ?: shaded(rgb, b.shade))
             fillPath(b.path, col.copy(alpha = b.alpha), blend)
         }
     } else if (dabs != null) {
-        if (r.bristle > 0f) drawBristleDabs(dabs, r.bristleVariant, r.bristle, r.dabFlow, rgb, blend)
+        if (tipImage != null) drawTipDabs(dabs, tipImage, rgb, blend)
+        else if (r.bristle > 0f) drawBristleDabs(dabs, r.bristleVariant, r.bristle, r.dabFlow, rgb, blend)
         else drawDabs(dabs, r.dabHardness, r.dabFlow, rgb, blend)
     } else if (lines != null) {
         for (l in lines) strokePath(l.path, rgb.copy(alpha = l.alpha), l.width, blend)
@@ -1042,8 +1084,9 @@ private fun DrawScope.drawGrain(strength: Float, kind: GrainKind, r: Rect) {
 /**
  * Desenha um traço. A opacidade vem do alfa da cor (a da borracha também: a borracha pode apagar só em parte);
  * a borracha usa DstOut (apaga a opacidade, não pinta de branco).
- * Com opacidade < 100%, modo "dentro"/"por trás", toques suaves, cerdas ou textura, as peças são desenhadas numa
- * camada que depois recebe o alfa, o modo e a textura, para não escurecer onde as peças se sobrepõem.
+ * Com opacidade < 100%, modo "dentro"/"por trás", toques suaves, cerdas, lápis, pontas importadas ou textura, as
+ * peças são desenhadas numa camada que depois recebe o alfa, o modo e a textura, para não escurecer onde as peças se
+ * sobrepõem.
  */
 internal fun DrawScope.drawInk(s: BrushStroke, tint: Color?, useCache: Boolean) {
     if (s.points.isEmpty()) return
