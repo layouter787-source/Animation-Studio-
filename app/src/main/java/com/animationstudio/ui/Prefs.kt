@@ -12,6 +12,8 @@ internal class Prefs(context: Context) {
         StudioRender.inkPercent = sp.getInt("inkPercent", 35).coerceIn(0, 100)
         // Gera as texturas dos pincéis fora da thread principal, para o primeiro traço com textura não travar.
         StudioRender.warmUp()
+        // Pincéis que o utilizador importou de imagens (uma vez por arranque).
+        CustomBrushes.load(context)
     }
 
     var penOnly: Boolean
