@@ -18,6 +18,9 @@ private const val SLIVER_THICKNESS = 10f
 /** Memória da referência do balde: até ~4 milhões de células (Full HD fica 1:1, folhas maiores são reduzidas). */
 private const val MAX_CELLS = 4_000_000f
 
+/** Um pixel de tinta com esta opacidade ou mais está "totalmente coberto" (alfa 230 de 255 = 90%). */
+private const val SOLID_ALPHA = 230
+
 /**
  * Balde de tinta rápido (tempo O(pixels), independente do tamanho da fresta):
  *  - referência = o que está visível no frame, desenhado em vetor, em até ~4 milhões de células;
@@ -26,7 +29,10 @@ private const val MAX_CELLS = 4_000_000f
  *  - tenta primeiro SEM fechar frestas (preenche tudo o que está ligado, incluindo riscos finos e zonas apagadas);
  *    só se o preenchimento "vazar" (cobrir quase a folha toda) tenta fechar frestas, cada vez maiores;
  *  - o fecho de frestas é morfológico (dilatar e erodir com somas de prefixos): não engrossa as linhas;
- *  - expansão: a região entra [growPx] POR BAIXO das linhas, mas só nos pixels de tinta reais (nunca para o outro lado);
+ *  - COLADO À LINHA, SEM VAZAR: o preenchimento entra por baixo da linha de duas formas. (1) A primeira camada de
+ *    pixels de tinta junto à região (a borda esbatida do lado de dentro) entra sempre, para não ficar fio branco.
+ *    (2) Mais fundo, só entra em pixels totalmente cobertos de tinta (≥ 90%), até [growPx]. A borda esbatida do lado
+ *    de FORA da linha nunca entra, por isso nenhuma cor aparece do outro lado, nem com muito zoom;
  *  - bolsas e fatias: cantos minúsculos e tiras finas coladas ao preenchimento (a sobra onde o fim de um círculo
  *    não coincide com o início) juntam-se ao preenchimento; áreas grandes de outras regiões ficam de fora;
  *  - o preenchimento é guardado em modo "por trás" (mode = 2): a tinta das linhas fica sempre por cima.
@@ -62,15 +68,23 @@ internal fun computeFill(
     val sg = (seed shr 8) and 0xFF
     val sb = seed and 0xFF
     val barrier = BooleanArray(w * h)
+    // Pixels de tinta totalmente cobertos: só por baixo destes o preenchimento entra além da primeira camada.
+    val solid = BooleanArray(w * h)
     var anyBarrier = false
     for (i in px.indices) {
         val p = px[i]
-        val b = if (transparentSeed) {
-            (p ushr 24) > inkAlpha
+        val b: Boolean
+        val s: Boolean
+        if (transparentSeed) {
+            val a = p ushr 24
+            b = a > inkAlpha
+            s = a >= SOLID_ALPHA
         } else {
-            abs((p ushr 24) - sa) + abs(((p shr 16) and 0xFF) - sr) + abs(((p shr 8) and 0xFF) - sg) + abs((p and 0xFF) - sb) > 60
+            b = abs((p ushr 24) - sa) + abs(((p shr 16) and 0xFF) - sr) + abs(((p shr 8) and 0xFF) - sg) + abs((p and 0xFF) - sb) > 60
+            s = b
         }
         barrier[i] = b
+        solid[i] = s
         if (b) anyBarrier = true
     }
 
@@ -161,12 +175,11 @@ internal fun computeFill(
         }
         for (c in pocketCells) visited[c] = true
 
-        // Expansão por baixo da tinta: só entra em pixels de tinta reais (barrier), nunca em células livres do outro lado
-        // da linha. Assim a cor não sai do contorno e não fica fio de borda.
-        return if (growCells > 0) {
-            val grown = dilate(visited, w, h, growCells)
-            BooleanArray(w * h) { visited[it] || (grown[it] && barrier[it]) }
-        } else visited
+        // Por baixo da linha, colado e sem vazar: a 1.ª camada de tinta junto à região (borda esbatida de dentro) e,
+        // mais fundo, só tinta totalmente coberta. A borda esbatida de fora nunca entra.
+        val first = dilate(visited, w, h, 1)
+        val deep = if (growCells > 1) dilate(visited, w, h, growCells) else first
+        return BooleanArray(w * h) { visited[it] || (first[it] && barrier[it]) || (deep[it] && solid[it]) }
     }
 
     fun coverage(r: BooleanArray): Float {
