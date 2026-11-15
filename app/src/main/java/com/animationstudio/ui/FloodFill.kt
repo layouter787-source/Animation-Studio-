@@ -15,10 +15,14 @@ import kotlin.math.sqrt
 /** Uma fatia é "fina" se a sua espessura média (2×área/perímetro) for até isto, em células. */
 private const val SLIVER_THICKNESS = 10f
 
+/** Memória da referência do balde: até ~4 milhões de células (Full HD fica 1:1, folhas maiores são reduzidas). */
+private const val MAX_CELLS = 4_000_000f
+
 /**
  * Balde de tinta rápido (tempo O(pixels), independente do tamanho da fresta):
- *  - referência = o que está visível no frame, em até ~2 milhões de células (memória baixa, sem estourar a RAM);
- *  - um pixel conta como tinta a partir da opacidade escolhida pelo utilizador ([StudioRender.inkPercent]);
+ *  - referência = o que está visível no frame, desenhado em vetor, em até ~4 milhões de células;
+ *  - um pixel conta como tinta (parede) a partir da opacidade [StudioRender.inkPercent] (8% por defeito: até as linhas
+ *    finas e leves de lápis são parede e o preenchimento não passa por elas);
  *  - tenta primeiro SEM fechar frestas (preenche tudo o que está ligado, incluindo riscos finos e zonas apagadas);
  *    só se o preenchimento "vazar" (cobrir quase a folha toda) tenta fechar frestas, cada vez maiores;
  *  - o fecho de frestas é morfológico (dilatar e erodir com somas de prefixos): não engrossa as linhas;
@@ -38,7 +42,7 @@ internal fun computeFill(
     gapPx: Int,
     growPx: Int,
 ): BrushStroke? {
-    val unit = max(1f, sqrt(sw.toFloat() * sh.toFloat() / 2_000_000f))
+    val unit = max(1f, sqrt(sw.toFloat() * sh.toFloat() / MAX_CELLS))
     val w = ceil(sw / unit).toInt().coerceAtLeast(1)
     val h = ceil(sh / unit).toInt().coerceAtLeast(1)
     val sx = (seedX / unit).toInt()
@@ -48,7 +52,7 @@ internal fun computeFill(
     val bmp = renderComposite(project, project.currentFrame, sw, sh, w, h, background = null, useCache = false)
     val px = IntArray(w * h)
     bmp.asAndroidBitmap().getPixels(px, 0, w, 0, 0, w, h)
-    // Limiar de tinta escolhido pelo utilizador: 35% => alfa 89. Com 0% qualquer vestígio conta como tinta.
+    // Limiar de tinta: 8% => alfa 20. Com 0% qualquer vestígio conta como tinta.
     val inkAlpha = (StudioRender.inkPercent.coerceIn(0, 100) * 255 / 100)
     val seed = px[sy * w + sx]
     val transparentSeed = (seed ushr 24) <= inkAlpha

@@ -9,7 +9,8 @@ internal class Prefs(context: Context) {
     init {
         StudioRender.taperEnds = sp.getBoolean("taperEnds", false)
         StudioRender.pixelated = sp.getBoolean("pixelated", false)
-        StudioRender.inkPercent = sp.getInt("inkPercent", 35).coerceIn(0, 100)
+        // Chave nova: o limiar antigo (35%) deixava passar o balde por linhas finas e leves.
+        StudioRender.inkPercent = sp.getInt("inkPercent2", 8).coerceIn(0, 100)
         // Gera as texturas dos pincéis fora da thread principal, para o primeiro traço com textura não travar.
         StudioRender.warmUp()
         // Pincéis que o utilizador importou de imagens (uma vez por arranque).
@@ -32,9 +33,10 @@ internal class Prefs(context: Context) {
         get() = sp.getBoolean("toolsRight", false)
         set(v) { sp.edit().putBoolean("toolsRight", v).apply() }
 
+    /** Smoothing por corda (0–1 = 0–40 px). Por defeito curto (6 px): a corda comprida deixava o traço muito atrasado. */
     var stabilizer: Float
-        get() = sp.getFloat("stabilizer", 0.35f)
-        set(v) { sp.edit().putFloat("stabilizer", v).apply() }
+        get() = sp.getFloat("stabilizer2", 0.15f)
+        set(v) { sp.edit().putFloat("stabilizer2", v).apply() }
 
     /** Suavização do traço em percentagem (0..1). */
     var smoothing: Float
@@ -51,8 +53,8 @@ internal class Prefs(context: Context) {
         get() = sp.getBoolean("pixelated", false)
         set(v) { sp.edit().putBoolean("pixelated", v).apply(); StudioRender.pixelated = v }
 
-    /** Opacidade (0–100%) a partir da qual o balde trata um pixel como tinta. */
+    /** Opacidade (0–100%) a partir da qual o balde trata um pixel como tinta (parede). */
     var inkPercent: Int
-        get() = sp.getInt("inkPercent", 35).coerceIn(0, 100)
-        set(v) { val c = v.coerceIn(0, 100); sp.edit().putInt("inkPercent", c).apply(); StudioRender.inkPercent = c }
+        get() = sp.getInt("inkPercent2", 8).coerceIn(0, 100)
+        set(v) { val c = v.coerceIn(0, 100); sp.edit().putInt("inkPercent2", c).apply(); StudioRender.inkPercent = c }
 }
