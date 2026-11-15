@@ -72,7 +72,8 @@ import kotlin.math.sin
 // DESEMPENHO E NITIDEZ: no editor, cada camada de cada frame é rasterizada UMA vez para uma imagem (ver [rasterFor]) e
 // o ecrã só junta essas imagens. Isso só se usa enquanto a folha não está ampliada para além da resolução da imagem:
 // com mais zoom volta o desenho vetorial (sempre nítido, sem pixelização nem desfoque), e só se desenha o que está
-// dentro do ecrã. As exportações e o balde usam sempre o desenho vetorial completo.
+// dentro do ecrã. O traço em curso de pincéis pesados mostra-se como linha leve (ver [drawLive]). As exportações e o
+// balde usam sempre o desenho vetorial completo.
 // ---------------------------------------------------------------------------------------------
 
 private class InkPass(val width: Float, val alpha: Float, val body: Path?, val polys: List<Path>, val tips: List<Pair<Offset, Float>>)
@@ -1121,6 +1122,31 @@ internal fun DrawScope.drawInk(s: BrushStroke, tint: Color?, useCache: Boolean) 
     drawContext.canvas.restore()
 }
 
+/**
+ * Traço em curso (o dedo ainda está no ecrã). Os pincéis pesados (lápis, cerdas, toques suaves, texturas, pontas
+ * importadas, carimbos, pontas afinadas) precisam de milhares de toques por traço e redesenhá-los todos a cada
+ * movimento do dedo travava a app. Enquanto o dedo desenha, mostra-se uma linha contínua leve, com a mesma cor,
+ * espessura e opacidade; ao levantar o dedo o traço verdadeiro desenha-se uma só vez e fica em cache. Os pincéis
+ * simples (tinta, marcadores, borrachas duras) mostram-se já como ficam.
+ */
+private fun DrawScope.drawLive(s: BrushStroke, tint: Color?) {
+    val preset = if (s.brush.isNotEmpty()) BrushLibrary.byIdOrNull(s.brush) else null
+    val heavy = CustomBrushes.find(s.brush) != null || StudioRender.taperEnds ||
+        (
+            preset != null && (
+                preset.stamp != StampShape.NONE || preset.soft || preset.grain > 0f || preset.lines > 1 ||
+                    BrushDynamics.bristle(preset) > 0f || BrushDynamics.pencil(preset) != null
+                )
+            )
+    if (!heavy || s.points.size < 2 || s.image != null || s.fill != null) {
+        drawElement(s, tint, false)
+        return
+    }
+    val base = tint ?: Color(s.colorArgb)
+    val color = if (s.erase) Color.Black.copy(alpha = base.alpha) else base
+    strokePath(polyline(s.points), color, max(0.5f, s.width), if (s.erase) BlendMode.DstOut else BlendMode.SrcOver)
+}
+
 // ---------------------------------------------------------------------------------------------
 // Preenchimentos (balde), máscaras de borracha e imagens (seleção do laço, importação)
 // ---------------------------------------------------------------------------------------------
@@ -1259,7 +1285,7 @@ internal fun DrawScope.drawFrameLayers(
             val shown = if (useCache && selected == null) cullStrokes(strokes) else strokes
             drawElements(shown, tint, useCache, if (l.id == selLayerId) selected else null, selTransform)
         }
-        if (live != null && hasLive) drawElement(live, tint, false)
+        if (live != null && hasLive) drawLive(live, tint)
         drawContext.canvas.restore()
     }
 }
