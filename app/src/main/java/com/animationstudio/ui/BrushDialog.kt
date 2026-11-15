@@ -1,5 +1,8 @@
 package com.animationstudio.ui
 
+import android.widget.Toast
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -21,6 +24,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.Button
 import androidx.compose.material3.Icon
@@ -32,6 +36,7 @@ import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -109,7 +114,8 @@ private fun ToggleRow(label: String, checked: Boolean, onChange: (Boolean) -> Un
 /**
  * Biblioteca de pincéis/borrachas (como no esboço): aba, pesquisa, categorias e lista com pré-visualização
  * renderizada. Tocar num pincel escolhe-o e abre logo as definições dele (tamanho, opacidade, suavização,
- * smoothing, pontas); os três pontos fazem o mesmo.
+ * smoothing, pontas); os três pontos fazem o mesmo. O botão "+" importa uma imagem do telemóvel (PNG, JPG, com ou
+ * sem transparência) como ponta de um pincel novo, na categoria "Meus pincéis".
  */
 @Composable
 internal fun BrushLibraryDialog(
@@ -119,9 +125,28 @@ internal fun BrushLibraryDialog(
     onSettings: (BrushPreset) -> Unit,
     onDismiss: () -> Unit,
 ) {
+    val ctx = LocalContext.current
     var query by remember { mutableStateOf("") }
     var category by remember { mutableStateOf<String?>(null) }
     var showCats by remember { mutableStateOf(false) }
+    var imported by remember { mutableIntStateOf(0) }
+    val picker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
+        if (uri != null) {
+            val name = CustomBrushes.importFrom(ctx, uri)
+            Toast.makeText(
+                ctx,
+                if (name != null) "Pincel \"$name\" importado" else "Não foi possível importar a imagem",
+                Toast.LENGTH_SHORT,
+            ).show()
+            if (name != null) {
+                category = BrushLibrary.CUSTOM
+                showCats = false
+            }
+            imported++
+        }
+    }
+    // Lê o contador para a lista se refazer depois de uma importação.
+    val refresh = imported
     val cats = BrushLibrary.categoriesOf(kind)
     val list = BrushLibrary.search(kind, query, category)
     val shape = RoundedCornerShape(16.dp)
@@ -161,6 +186,15 @@ internal fun BrushLibraryDialog(
                                 .clickable { showCats = !showCats }.padding(horizontal = 12.dp),
                             contentAlignment = Alignment.Center,
                         ) { Text("Categorias", style = StudioType.Label.copy(fontSize = 11.sp)) }
+                        if (kind == BrushKind.BRUSH) {
+                            // Importar uma imagem do telemóvel como pincel (PNG, JPG, com ou sem transparência).
+                            Box(
+                                Modifier.size(34.dp).clip(RoundedCornerShape(10.dp)).background(StudioColors.Surface2)
+                                    .border(1.dp, StudioColors.Outline, RoundedCornerShape(10.dp))
+                                    .clickable { picker.launch("image/*") },
+                                contentAlignment = Alignment.Center,
+                            ) { Icon(Icons.Default.Add, "Importar pincel de imagem", tint = StudioColors.Ink, modifier = Modifier.size(18.dp)) }
+                        }
                     }
                     Text((category ?: "Todos").uppercase(), style = StudioType.Caption)
                     if (showCats) {
@@ -186,7 +220,7 @@ internal fun BrushLibraryDialog(
                         }
                     } else {
                         LazyColumn(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                            items(list, key = { it.id }) { p ->
+                            items(list, key = { "$refresh-${it.id}" }) { p ->
                                 val sel = p.id == selectedId
                                 Row(
                                     Modifier.fillMaxWidth().height(46.dp).clip(RoundedCornerShape(10.dp))
