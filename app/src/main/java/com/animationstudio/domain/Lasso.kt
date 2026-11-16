@@ -1,5 +1,6 @@
 package com.animationstudio.domain
 
+import kotlin.math.ceil
 import kotlin.math.max
 import kotlin.math.min
 
@@ -24,6 +25,9 @@ fun BrushStroke.bounds(): Bounds? {
 
 /** Geometria do laço: ponto dentro de polígono e polígonos dos modos retângulo e elipse. */
 object Lasso {
+    /** Máximo de píxeis da imagem levantada pelo laço (memória): ~9 milhões = 36 MB em ARGB_8888. */
+    const val MAX_LIFT_PIXELS = 9_000_000L
+
     fun pointInPolygon(p: Point, poly: List<Point>): Boolean {
         var inside = false
         var j = poly.size - 1
@@ -72,5 +76,72 @@ object Lasso {
             acc = if (acc == null) b else acc.union(b)
         }
         return acc
+    }
+
+    /**
+     * Fator de super-amostragem da seleção (1..4): quantos píxeis da imagem levantada por unidade da folha.
+     * Sobe com o zoom do editor (para ficar nítida quando se trabalha ampliado) e desce nas seleções grandes
+     * para respeitar [MAX_LIFT_PIXELS].
+     */
+    fun supersample(w: Int, h: Int, zoom: Float): Int {
+        val area = max(1L, w.toLong() * h.toLong())
+        var k = ceil(zoom * 1.5f).toInt().coerceIn(2, 4)
+        while (k > 1 && area * k * k > MAX_LIFT_PIXELS) k--
+        return k
+    }
+
+    /**
+     * Máscara do polígono sobre a grelha da caixa (x0, y0, w, h) em unidades da folha, com [k] células por unidade.
+     * Regra do enrolamento (como o preenchimento do canvas): o interior de um laço feito à mão que se cruza
+     * a si próprio fica todo selecionado. Uma célula está dentro se o seu centro está dentro.
+     * Tamanho do resultado: (w·k)·(h·k), por linhas.
+     */
+    fun rasterize(polygon: List<Point>, x0: Int, y0: Int, w: Int, h: Int, k: Int): BooleanArray {
+        val mw = w * k
+        val mh = h * k
+        val out = BooleanArray(max(0, mw) * max(0, mh))
+        val n = polygon.size
+        if (n < 3 || mw <= 0 || mh <= 0) return out
+        val xs = FloatArray(n)
+        val dirs = IntArray(n)
+        for (row in 0 until mh) {
+            val y = y0 + (row + 0.5f) / k
+            var cnt = 0
+            for (i in 0 until n) {
+                val a = polygon[i]
+                val b = polygon[if (i + 1 == n) 0 else i + 1]
+                val up = a.y <= y && b.y > y
+                val down = b.y <= y && a.y > y
+                if (up || down) {
+                    val t = (y - a.y) / (b.y - a.y)
+                    xs[cnt] = a.x + t * (b.x - a.x)
+                    dirs[cnt] = if (up) 1 else -1
+                    cnt++
+                }
+            }
+            if (cnt < 2) continue
+            for (i in 1 until cnt) {
+                val xv = xs[i]
+                val dv = dirs[i]
+                var j = i - 1
+                while (j >= 0 && xs[j] > xv) {
+                    xs[j + 1] = xs[j]
+                    dirs[j + 1] = dirs[j]
+                    j--
+                }
+                xs[j + 1] = xv
+                dirs[j + 1] = dv
+            }
+            var winding = 0
+            for (i in 0 until cnt - 1) {
+                winding += dirs[i]
+                if (winding != 0) {
+                    val c0 = ceil((xs[i] - x0) * k - 0.5f).toInt().coerceIn(0, mw)
+                    val c1 = ceil((xs[i + 1] - x0) * k - 0.5f).toInt().coerceIn(0, mw)
+                    for (c in c0 until c1) out[row * mw + c] = true
+                }
+            }
+        }
+        return out
     }
 }
