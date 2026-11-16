@@ -1,15 +1,13 @@
 package com.animationstudio.ui
 
 import android.graphics.Bitmap
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.geometry.Size
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.Paint
-import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.graphics.drawscope.CanvasDrawScope
-import androidx.compose.ui.graphics.drawscope.clipPath
 import androidx.compose.ui.graphics.drawscope.withTransform
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.LayoutDirection
@@ -18,6 +16,7 @@ import com.animationstudio.domain.BrushStroke
 import com.animationstudio.domain.FillRegion
 import com.animationstudio.domain.ImageData
 import com.animationstudio.domain.ImageSource
+import com.animationstudio.domain.Lasso
 import com.animationstudio.domain.Point
 import com.animationstudio.domain.Project
 import java.io.ByteArrayOutputStream
@@ -31,11 +30,27 @@ import kotlin.math.min
 internal class LiftResult(val image: ImageData, val eraser: BrushStroke)
 
 /**
- * Laço pixel a pixel: renderiza o que a camada tem dentro do polígono (com bordas suavizadas), devolve-o como
- * imagem transformável e uma máscara de borracha (a 2×) para retirar esse conteúdo da camada.
+ * Laço pixel a pixel, sem perda de qualidade.
+ *
+ * O desenho da camada é vetorial, por isso a seleção é renderizada a [Lasso.supersample] píxeis por unidade da folha
+ * (2 a 4×, mais quanto maior o [zoom] do editor), e não a 1×: ao mover, escalar ou rodar a seleção continua nítida.
+ *
+ * A máscara do polígono ([Lasso.rasterize]) é calculada UMA vez, na mesma grelha, e usada nos dois lados:
+ *  - a imagem levantada fica só com os píxeis dentro da máscara;
+ *  - a borracha que retira a região original apaga exatamente essas mesmas células.
+ * Assim a imagem e o buraco são complementares: sem seleção movida, o resultado é igual ao desenho original
+ * (sem fio claro nem rebordo duplicado nas bordas).
+ *
  * Devolve null se a região está vazia. Chamar fora da thread principal.
  */
-internal fun liftSelection(project: Project, layerId: Long, sw: Int, sh: Int, polygon: List<Point>): LiftResult? {
+internal fun liftSelection(
+    project: Project,
+    layerId: Long,
+    sw: Int,
+    sh: Int,
+    polygon: List<Point>,
+    zoom: Float = StudioRender.view.scale,
+): LiftResult? {
     if (polygon.size < 3) return null
     val x0 = max(0, floor(polygon.minOf { it.x }).toInt())
     val y0 = max(0, floor(polygon.minOf { it.y }).toInt())
@@ -47,43 +62,47 @@ internal fun liftSelection(project: Project, layerId: Long, sw: Int, sh: Int, po
     val layer = project.layers.firstOrNull { it.id == layerId } ?: return null
     val strokes = layer.drawingAt(project.currentFrameId)?.strokes ?: return null
 
-    fun polyPath(scale: Float): Path {
-        val p = Path()
-        p.moveTo((polygon[0].x - x0) * scale, (polygon[0].y - y0) * scale)
-        for (i in 1 until polygon.size) p.lineTo((polygon[i].x - x0) * scale, (polygon[i].y - y0) * scale)
-        p.close()
-        return p
-    }
+    val k = Lasso.supersample(bw, bh, zoom)
+    val kf = k.toFloat()
+    val mw = bw * k
+    val mh = bh * k
 
-    val bmp = ImageBitmap(bw, bh)
-    CanvasDrawScope().draw(Density(1f), LayoutDirection.Ltr, GfxCanvas(bmp), Size(bw.toFloat(), bh.toFloat())) {
-        clipPath(polyPath(1f)) {
-            withTransform({ translate(-x0.toFloat(), -y0.toFloat()) }) {
+    val bmp = ImageBitmap(mw, mh)
+    ImageScale.with(kf) {
+        CanvasDrawScope().draw(Density(1f), LayoutDirection.Ltr, GfxCanvas(bmp), Size(mw.toFloat(), mh.toFloat())) {
+            // p' = k · (p − origem): primeiro desloca, depois amplia (a última chamada aplica-se primeiro).
+            withTransform({ scale(kf, kf, Offset.Zero); translate(-x0.toFloat(), -y0.toFloat()) }) {
                 drawContext.canvas.saveLayer(Rect(0f, 0f, sw.toFloat(), sh.toFloat()), Paint())
                 drawElements(strokes, null, false)
                 drawContext.canvas.restore()
             }
         }
     }
+
+    val mask = Lasso.rasterize(polygon, x0, y0, bw, bh, k)
     val abmp: Bitmap = bmp.asAndroidBitmap()
-    val px = IntArray(bw * bh)
-    abmp.getPixels(px, 0, bw, 0, 0, bw, bh)
-    if (px.none { (it ushr 24) != 0 }) return null
+    val px = IntArray(mw * mh)
+    abmp.getPixels(px, 0, mw, 0, 0, mw, mh)
+    var any = false
+    for (i in px.indices) {
+        if (mask[i]) {
+            if ((px[i] ushr 24) != 0) any = true
+        } else {
+            px[i] = 0
+        }
+    }
+    if (!any) return null
+    abmp.setPixels(px, 0, mw, 0, 0, mw, mh)
+
     val png = ByteArrayOutputStream()
     abmp.compress(Bitmap.CompressFormat.PNG, 100, png)
+    val source = ImageSource(png.toByteArray(), mw, mh)
+    // O bitmap já está pronto: evita descodificar o PNG logo a seguir (a seleção aparece mais depressa).
+    source.cache = bmp
 
-    val mw = bw * 2
-    val mh = bh * 2
-    val mbmp = ImageBitmap(mw, mh)
-    CanvasDrawScope().draw(Density(1f), LayoutDirection.Ltr, GfxCanvas(mbmp), Size(mw.toFloat(), mh.toFloat())) {
-        drawPath(polyPath(2f), Color.Black)
-    }
-    val mpx = IntArray(mw * mh)
-    mbmp.asAndroidBitmap().getPixels(mpx, 0, mw, 0, 0, mw, mh)
-    val mask = BooleanArray(mw * mh) { (mpx[it] ushr 24) > 127 }
-    val region = FillRegion.encode(mask, mw, mh, x0 * 2, y0 * 2, 0.5f)
+    val region = FillRegion.encode(mask, mw, mh, x0 * k, y0 * k, 1f / kf)
     return LiftResult(
-        ImageData(ImageSource(png.toByteArray(), bw, bh), Affine.translate(x0.toFloat(), y0.toFloat())),
+        ImageData(source, Affine(1f / kf, 0f, 0f, 1f / kf, x0.toFloat(), y0.toFloat())),
         BrushStroke(emptyList(), 0xFF000000.toInt(), 0f, erase = true, fill = region),
     )
 }
