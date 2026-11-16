@@ -17,11 +17,11 @@ import kotlin.math.min
 import kotlin.math.roundToInt
 
 /**
- * Pincéis que o utilizador importa de uma imagem sua (PNG, JPG, com ou sem transparência). A imagem vira a ponta do
- * pincel: se tem transparência, o que é opaco é tinta; se não tem, a tinta é a cor menos frequente (traço escuro sobre
- * fundo claro ou o contrário), com contraste normalizado. A ponta é guardada só como máscara de transparência em
- * 192×192, na pasta privada da app, e o pincel ganha a cor que o utilizador escolher. As imagens ficam só no
- * telemóvel do utilizador: a app não traz nenhuma.
+ * Pincéis que o utilizador importa de um PNG com fundo transparente. O PNG é a TEXTURA do pincel: o traço é uma
+ * linha contínua e uniforme (como um pincel normal) e só fica a tinta onde o PNG tem opacidade; a textura cobre a
+ * largura do traço. Não se carimba a ponta repetidamente. Só se aceitam PNG com transparência: sem ela não há forma
+ * de saber o que é tinta. A máscara fica guardada em 192×192 na pasta privada da app e o pincel usa a cor escolhida.
+ * As imagens ficam só no telemóvel do utilizador: a app não traz nenhuma.
  */
 internal object CustomBrushes {
     internal class Entry(val id: String, val name: String, val spacing: Float)
@@ -35,7 +35,7 @@ internal object CustomBrushes {
     private var dir: File? = null
 
     private fun toPreset(e: Entry) = BrushPreset(
-        e.id, e.name, BrushLibrary.CUSTOM, BrushKind.BRUSH, 40f, 1f, 0f, 1f, keywords = "importado png imagem ponta",
+        e.id, e.name, BrushLibrary.CUSTOM, BrushKind.BRUSH, 40f, 1f, 0f, 1f, keywords = "importado png textura",
     )
 
     private fun publish() {
@@ -66,7 +66,7 @@ internal object CustomBrushes {
 
     fun find(id: String): Entry? = if (id.startsWith("my_")) entries.firstOrNull { it.id == id } else null
 
-    /** Ponta do pincel (máscara branca com transparência), carregada do ficheiro na primeira vez. */
+    /** Textura do pincel (máscara branca com transparência), carregada do ficheiro na primeira vez. */
     fun tip(id: String): ImageBitmap? {
         tips[id]?.let { return it }
         val d = dir ?: return null
@@ -95,8 +95,11 @@ internal object CustomBrushes {
         null
     }
 
-    /** Converte uma imagem qualquer numa máscara de ponta de pincel (branco com transparência), 192×192, centrada. */
-    internal fun toTip(src: Bitmap): Bitmap {
+    /**
+     * Converte um PNG com transparência numa máscara de textura (branco com transparência), 192×192, centrada.
+     * Devolve null se a imagem não tem transparência (ou é toda transparente).
+     */
+    internal fun toTip(src: Bitmap): Bitmap? {
         val side = TIP_SIDE
         val k = min(side.toFloat() / src.width, side.toFloat() / src.height)
         val tw = max(1, (src.width * k).roundToInt())
@@ -104,44 +107,20 @@ internal object CustomBrushes {
         val scaled = Bitmap.createScaledBitmap(src, tw, th, true)
         val px = IntArray(tw * th)
         scaled.getPixels(px, 0, tw, 0, 0, tw, th)
-        var hasAlpha = false
-        var lumSum = 0.0
-        var counted = 0
+        var transparent = 0
+        var inked = 0
         for (p in px) {
             val a = p ushr 24
-            if (a < 250) hasAlpha = true
-            if (a > 20) {
-                lumSum += (0.299 * ((p shr 16) and 0xFF) + 0.587 * ((p shr 8) and 0xFF) + 0.114 * (p and 0xFF)) / 255.0
-                counted++
-            }
+            if (a < 250) transparent++
+            if (a > 20) inked++
         }
-        val inkIsDark = counted == 0 || lumSum / counted >= 0.5
-        // Quantidade de tinta (0–1) de cada pixel.
-        val ink = FloatArray(px.size)
-        var lo = Float.MAX_VALUE
-        var hi = -Float.MAX_VALUE
-        for (i in px.indices) {
-            val p = px[i]
-            val a = (p ushr 24) / 255f
-            val v = if (hasAlpha) {
-                a
-            } else {
-                val lum = ((0.299f * ((p shr 16) and 0xFF) + 0.587f * ((p shr 8) and 0xFF) + 0.114f * (p and 0xFF)) / 255f)
-                if (inkIsDark) 1f - lum else lum
-            }
-            ink[i] = v
-            if (v < lo) lo = v
-            if (v > hi) hi = v
-        }
-        val span = max(1e-3f, hi - lo)
+        if (transparent == 0 || inked == 0) return null
         val out = IntArray(side * side)
         val ox = (side - tw) / 2
         val oy = (side - th) / 2
         for (y in 0 until th) {
             for (x in 0 until tw) {
-                val raw = ink[y * tw + x]
-                val v = if (hasAlpha) raw else (raw - lo) / span
-                val a = (v.coerceIn(0f, 1f) * 255f).roundToInt()
+                val a = px[y * tw + x] ushr 24
                 out[(oy + y) * side + (ox + x)] = (a shl 24) or 0xFFFFFF
             }
         }
@@ -150,12 +129,12 @@ internal object CustomBrushes {
         return bmp
     }
 
-    /** Importa a imagem [uri] como pincel novo. Devolve o nome dado ao pincel, ou null se não foi possível. */
+    /** Importa o PNG [uri] como pincel novo. Devolve o nome dado ao pincel, ou null se não foi possível (por ex. sem transparência). */
     fun importFrom(context: Context, uri: Uri): String? {
         load(context)
         val d = dir ?: return null
         val src = decode(context, uri) ?: return null
-        val tip = toTip(src)
+        val tip = toTip(src) ?: return null
         val id = "my_" + System.currentTimeMillis().toString(36)
         val name = displayName(context, uri) ?: "Pincel importado ${entries.size + 1}"
         return try {
