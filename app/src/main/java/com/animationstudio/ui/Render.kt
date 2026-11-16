@@ -53,6 +53,7 @@ import java.util.concurrent.ConcurrentHashMap
 import androidx.compose.ui.graphics.Canvas as GfxCanvas
 import kotlin.math.PI
 import kotlin.math.abs
+import kotlin.math.ceil
 import kotlin.math.cos
 import kotlin.math.floor
 import kotlin.math.hypot
@@ -64,16 +65,17 @@ import kotlin.math.sin
 // ---------------------------------------------------------------------------------------------
 // Traços. Motores: contínuo (espessura uniforme, pontas redondas), lápis realista (grafite que se acumula, borda
 // esfumada, pontas esbatidas), toques suaves (aerógrafo/aguarela), cerdas (óleo, acrílico, leque: toques com padrão
-// de cerdas rodado pela direção do traço), pontas importadas de imagens do utilizador, linhas paralelas (borrachas
-// de cerdas), carimbos (motor mantido, sem pincéis na biblioteca) e textura procedural aplicada por cima (papel,
-// tela, madeira, pedra, nuvem, couro, areia, grunge, metal, concreto).
+// de cerdas rodado pela direção do traço), pincéis importados de PNG (linha uniforme com a textura do PNG), linhas
+// paralelas (borrachas de cerdas), carimbos (motor mantido, sem pincéis na biblioteca) e textura procedural aplicada
+// por cima (papel, tela, madeira, pedra, nuvem, couro, areia, grunge, metal, concreto).
 // A borracha NUNCA pinta de branco: usa composição DstOut (remove a opacidade do que existe na camada).
 //
 // DESEMPENHO E NITIDEZ: no editor, cada camada de cada frame é rasterizada UMA vez para uma imagem (ver [rasterFor]) e
 // o ecrã só junta essas imagens. Isso só se usa enquanto a folha não está ampliada para além da resolução da imagem:
 // com mais zoom volta o desenho vetorial (sempre nítido, sem pixelização nem desfoque), e só se desenha o que está
-// dentro do ecrã. O traço em curso de pincéis pesados mostra-se como linha leve (ver [drawLive]). As exportações e o
-// balde usam sempre o desenho vetorial completo.
+// dentro do ecrã. O TRAÇO EM CURSO de pincéis de toques (lápis, cerdas, suaves) mostra sempre os toques verdadeiros:
+// os que já estão assentes ficam numa imagem do traço e só se desenham os novos (ver [drawLiveStroke]). As
+// exportações e o balde usam sempre o desenho vetorial completo.
 // ---------------------------------------------------------------------------------------------
 
 private class InkPass(val width: Float, val alpha: Float, val body: Path?, val polys: List<Path>, val tips: List<Pair<Offset, Float>>)
@@ -97,8 +99,8 @@ private class InkRender(
     val bristleVariant: Int = 0,
     /** Carimbos da natureza com várias cores (árvore, galho, relva). */
     val tinted: List<TintBucket>? = null,
-    /** Ponta importada de uma imagem do utilizador (máscara branca com transparência). */
-    val tip: ImageBitmap? = null,
+    /** Textura de um pincel importado de PNG (máscara branca com transparência): o traço é uma linha uniforme. */
+    val tex: ImageBitmap? = null,
 )
 
 private val dabCache = ConcurrentHashMap<Int, ImageBitmap>()
@@ -677,15 +679,12 @@ private fun buildNatureStamps(s: BrushStroke, preset: BrushPreset, nature: Natur
 }
 
 private fun buildInk(s: BrushStroke): InkRender {
-    // Pincel importado de uma imagem do utilizador: a imagem é a ponta, carimbada ao longo do traço.
+    // Pincel importado de um PNG: linha contínua e uniforme; a textura do PNG decide onde fica tinta.
     val custom = CustomBrushes.find(s.brush)
     if (custom != null) {
-        val tipImage = CustomBrushes.tip(custom.id)
-        if (tipImage != null) {
-            return InkRender(
-                emptyList(), null, StampGeometry.dabs(s.points, s.width, 0f, custom.spacing), 1f, 1f, null, 0f, GrainKind.PAPER,
-                tip = tipImage,
-            )
+        val texture = CustomBrushes.tip(custom.id)
+        if (texture != null) {
+            return InkRender(listOf(buildPass(s, s.width, 1f)), null, null, 0f, 0f, null, 0f, GrainKind.PAPER, tex = texture)
         }
     }
     val preset = if (s.brush.isNotEmpty()) BrushLibrary.byIdOrNull(s.brush) else null
@@ -1030,22 +1029,10 @@ private fun DrawScope.drawBristleDabs(dabs: List<Stamp>, variant: Int, amount: F
     }
 }
 
-/** Pontas importadas: a imagem do utilizador carimbada ao longo do traço, rodada pela direção dele. */
-private fun DrawScope.drawTipDabs(dabs: List<Stamp>, tip: ImageBitmap, rgb: Color, blend: BlendMode) {
-    val filter = ColorFilter.tint(rgb, BlendMode.SrcIn)
-    val side = max(tip.width, tip.height).toFloat()
-    for (d in dabs) {
-        val k = d.size / side
-        val deg = d.rotation * 180f / PI.toFloat()
-        withTransform({
-            translate(d.x, d.y)
-            rotate(deg, Offset.Zero)
-            translate(-d.size / 2f, -d.size / 2f)
-            scale(k, k, Offset.Zero)
-        }) {
-            drawImage(tip, colorFilter = filter, blendMode = blend)
-        }
-    }
+/** Desenha os toques [dabs] de um pincel de toques (cerdas ou redondos/lápis) com a cor [rgb]. */
+private fun DrawScope.drawDabSet(r: InkRender, dabs: List<Stamp>, rgb: Color, blend: BlendMode) {
+    if (r.bristle > 0f) drawBristleDabs(dabs, r.bristleVariant, r.bristle, r.dabFlow, rgb, blend)
+    else drawDabs(dabs, r.dabHardness, r.dabFlow, rgb, blend)
 }
 
 /** Tom da cor: negativo escurece (mistura com preto), positivo clareia (mistura com branco). */
@@ -1057,16 +1044,13 @@ private fun DrawScope.drawRender(r: InkRender, rgb: Color, blend: BlendMode, mon
     val lines = r.lines
     val buckets = r.stampBuckets
     val tinted = r.tinted
-    val tipImage = r.tip
     if (tinted != null) {
         for (b in tinted) {
             val col = if (mono) rgb else (b.fixed ?: shaded(rgb, b.shade))
             fillPath(b.path, col.copy(alpha = b.alpha), blend)
         }
     } else if (dabs != null) {
-        if (tipImage != null) drawTipDabs(dabs, tipImage, rgb, blend)
-        else if (r.bristle > 0f) drawBristleDabs(dabs, r.bristleVariant, r.bristle, r.dabFlow, rgb, blend)
-        else drawDabs(dabs, r.dabHardness, r.dabFlow, rgb, blend)
+        drawDabSet(r, dabs, rgb, blend)
     } else if (lines != null) {
         for (l in lines) strokePath(l.path, rgb.copy(alpha = l.alpha), l.width, blend)
     } else if (buckets != null) {
@@ -1083,9 +1067,24 @@ private fun DrawScope.drawGrain(strength: Float, kind: GrainKind, r: Rect) {
 }
 
 /**
+ * Textura de um pincel importado de PNG: a imagem é ajustada à largura do traço e só fica tinta onde o PNG tem
+ * opacidade. A linha continua uniforme; não se carimba a ponta.
+ */
+private fun DrawScope.drawPngTexture(tex: ImageBitmap, width: Float, r: Rect) {
+    val k = max(1f, width) / max(tex.width, tex.height).toFloat()
+    val shader = ImageShader(tex, TileMode.Repeated, TileMode.Repeated)
+    withTransform({ scale(k, k, Offset.Zero) }) {
+        drawRect(
+            ShaderBrush(shader), Offset(r.left / k, r.top / k), Size(r.width / k, r.height / k),
+            blendMode = BlendMode.DstIn,
+        )
+    }
+}
+
+/**
  * Desenha um traço. A opacidade vem do alfa da cor (a da borracha também: a borracha pode apagar só em parte);
  * a borracha usa DstOut (apaga a opacidade, não pinta de branco).
- * Com opacidade < 100%, modo "dentro"/"por trás", toques suaves, cerdas, lápis, pontas importadas ou textura, as
+ * Com opacidade < 100%, modo "dentro"/"por trás", toques suaves, cerdas, lápis, textura de PNG ou textura, as
  * peças são desenhadas numa camada que depois recebe o alfa, o modo e a textura, para não escurecer onde as peças se
  * sobrepõem.
  */
@@ -1103,7 +1102,7 @@ internal fun DrawScope.drawInk(s: BrushStroke, tint: Color?, useCache: Boolean) 
         s.mode == 2 -> BlendMode.DstOver
         else -> BlendMode.SrcOver
     }
-    val needLayer = alpha < 0.999f || (!s.erase && s.mode != 0) || render.dabs != null || render.grain > 0f
+    val needLayer = alpha < 0.999f || (!s.erase && s.mode != 0) || render.dabs != null || render.grain > 0f || render.tex != null
     if (!needLayer) {
         // Borracha total: duas passagens DstOut tiram o fio de anti-aliasing que sobrava nas bordas ((1-c)² em vez de (1-c)).
         val passes = if (s.erase) 2 else 1
@@ -1119,32 +1118,103 @@ internal fun DrawScope.drawInk(s: BrushStroke, tint: Color?, useCache: Boolean) 
     drawContext.canvas.saveLayer(rect, paint)
     drawRender(render, rgb, BlendMode.SrcOver, mono)
     if (render.grain > 0f) drawGrain(render.grain, render.grainKind, rect)
+    val tex = render.tex
+    if (tex != null) drawPngTexture(tex, s.width, rect)
     drawContext.canvas.restore()
 }
 
+// ---------------------------------------------------------------------------------------------
+// Traço em curso: toques verdadeiros, sem travar
+// ---------------------------------------------------------------------------------------------
+
+private data class LiveSig(
+    val layerId: Long, val brush: String, val color: Int, val width: Float, val mode: Int, val erase: Boolean,
+    val x0: Float, val y0: Float, val w: Int, val h: Int,
+)
+
+/** Imagem (resolução da cache de camadas) onde se acumulam os toques já assentes do traço em curso. */
+private var liveBmp: ImageBitmap? = null
+private var liveSig: LiveSig? = null
+private var liveStamped = 0
+
 /**
- * Traço em curso (o dedo ainda está no ecrã). Os pincéis pesados (lápis, cerdas, toques suaves, texturas, pontas
- * importadas, carimbos, pontas afinadas) precisam de milhares de toques por traço e redesenhá-los todos a cada
- * movimento do dedo travava a app. Enquanto o dedo desenha, mostra-se uma linha contínua leve, com a mesma cor,
- * espessura e opacidade; ao levantar o dedo o traço verdadeiro desenha-se uma só vez e fica em cache. Os pincéis
- * simples (tinta, marcadores, borrachas duras) mostram-se já como ficam.
+ * Traço em curso (o dedo ainda está no ecrã). Os pincéis de toques (lápis, cerdas, suaves) precisam de milhares
+ * de toques por traço; redesenhá-los todos a cada movimento do dedo travava. Aqui desenham-se sempre os toques
+ * VERDADEIROS (textura, esbatido, dureza), mas de forma incremental: os toques já estáveis (todos menos os da
+ * ponta, que ainda mudam com a suavização) são carimbados uma só vez numa imagem do traço, e em cada imagem do
+ * ecrã só se junta essa imagem mais os poucos toques novos da ponta. O resultado é o mesmo de quando o dedo
+ * levanta. Com zoom (desenho vetorial) o traço tem poucos toques e desenha-se direto.
  */
-private fun DrawScope.drawLive(s: BrushStroke, tint: Color?) {
+private fun DrawScope.drawLiveStroke(s: BrushStroke, tint: Color?, incremental: Boolean, sw: Int, sh: Int, layerId: Long) {
     val preset = if (s.brush.isNotEmpty()) BrushLibrary.byIdOrNull(s.brush) else null
-    val heavy = CustomBrushes.find(s.brush) != null || StudioRender.taperEnds ||
-        (
-            preset != null && (
-                preset.stamp != StampShape.NONE || preset.soft || preset.grain > 0f || preset.lines > 1 ||
-                    BrushDynamics.bristle(preset) > 0f || BrushDynamics.pencil(preset) != null
-                )
-            )
-    if (!heavy || s.points.size < 2 || s.image != null || s.fill != null) {
+    val dabBrush = preset != null && CustomBrushes.find(s.brush) == null && (
+        BrushDynamics.pencil(preset) != null || BrushDynamics.bristle(preset) > 0f ||
+            (preset.soft && preset.stamp == StampShape.NONE)
+        )
+    if (!incremental || !dabBrush || s.points.size < 2 || s.image != null || s.fill != null) {
         drawElement(s, tint, false)
         return
     }
-    val base = tint ?: Color(s.colorArgb)
-    val color = if (s.erase) Color.Black.copy(alpha = base.alpha) else base
-    strokePath(polyline(s.points), color, max(0.5f, s.width), if (s.erase) BlendMode.DstOut else BlendMode.SrcOver)
+    val render = buildInk(s)
+    val dabs = render.dabs
+    if (dabs == null || dabs.size < 80) {
+        drawElement(s, tint, false)
+        return
+    }
+    val source = tint ?: Color(s.colorArgb)
+    val rgb = if (s.erase) Color.Black else source.copy(alpha = 1f)
+    val k = min(1f, RASTER_MAX_SIDE.toFloat() / max(sw, sh))
+    val rw = max(1, (sw * k).roundToInt())
+    val rh = max(1, (sh * k).roundToInt())
+    val sig = LiveSig(layerId, s.brush, s.colorArgb, s.width, s.mode, s.erase, s.points[0].x, s.points[0].y, rw, rh)
+
+    var bmp = liveBmp
+    if (bmp == null || bmp.width != rw || bmp.height != rh) {
+        bmp = ImageBitmap(rw, rh)
+        liveBmp = bmp
+        liveSig = null
+    }
+    if (sig != liveSig || dabs.size < liveStamped) {
+        // Traço novo: limpa a imagem do traço.
+        CanvasDrawScope().draw(Density(1f), LayoutDirection.Ltr, GfxCanvas(bmp), Size(rw.toFloat(), rh.toFloat())) {
+            drawRect(Color.Transparent, blendMode = BlendMode.Clear)
+        }
+        liveSig = sig
+        liveStamped = 0
+    }
+
+    // Os toques da ponta ainda mudam com a suavização: ficam de fora da imagem e redesenham-se em cada imagem do ecrã.
+    val spacing = max(0.3f, hypot(dabs.last().x - dabs.first().x, dabs.last().y - dabs.first().y) / (dabs.size - 1))
+    val tail = ceil((6f * s.width + 40f) / spacing).toInt().coerceIn(8, 600)
+    val stable = max(0, dabs.size - tail)
+    if (stable > liveStamped) {
+        val fresh = dabs.subList(liveStamped, stable)
+        CanvasDrawScope().draw(Density(1f), LayoutDirection.Ltr, GfxCanvas(bmp), Size(rw.toFloat(), rh.toFloat())) {
+            withTransform({ scale(rw / sw.toFloat(), rh / sh.toFloat(), Offset.Zero) }) {
+                drawDabSet(render, fresh, rgb, BlendMode.SrcOver)
+            }
+        }
+        liveStamped = stable
+    }
+
+    val layerBlend = when {
+        s.erase -> BlendMode.DstOut
+        s.mode == 1 -> BlendMode.SrcAtop
+        s.mode == 2 -> BlendMode.DstOver
+        else -> BlendMode.SrcOver
+    }
+    val sheet = Rect(0f, 0f, sw.toFloat(), sh.toFloat())
+    val paint = Paint()
+    paint.alpha = source.alpha
+    paint.blendMode = layerBlend
+    drawContext.canvas.saveLayer(sheet, paint)
+    drawImage(
+        bmp, srcOffset = IntOffset.Zero, srcSize = IntSize(rw, rh),
+        dstOffset = IntOffset.Zero, dstSize = IntSize(sw, sh), filterQuality = FilterQuality.Medium,
+    )
+    drawDabSet(render, dabs.subList(stable, dabs.size), rgb, BlendMode.SrcOver)
+    if (render.grain > 0f) drawGrain(render.grain, render.grainKind, sheet)
+    drawContext.canvas.restore()
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1285,7 +1355,7 @@ internal fun DrawScope.drawFrameLayers(
             val shown = if (useCache && selected == null) cullStrokes(strokes) else strokes
             drawElements(shown, tint, useCache, if (l.id == selLayerId) selected else null, selTransform)
         }
-        if (live != null && hasLive) drawLive(live, tint)
+        if (live != null && hasLive) drawLiveStroke(live, tint, useCache && cleanZoom, sw.roundToInt(), sh.roundToInt(), l.id)
         drawContext.canvas.restore()
     }
 }
