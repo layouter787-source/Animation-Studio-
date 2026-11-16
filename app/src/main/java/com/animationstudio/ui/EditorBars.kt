@@ -24,16 +24,17 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Brush
-import androidx.compose.material.icons.filled.FormatColorFill
-import androidx.compose.material.icons.filled.KeyboardArrowDown
-import androidx.compose.material.icons.filled.KeyboardArrowUp
+import androidx.compose.material.icons.filled.FitScreen
+import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Redo
+import androidx.compose.material.icons.filled.ShowChart
 import androidx.compose.material.icons.filled.Undo
 import androidx.compose.material.icons.filled.Videocam
 import androidx.compose.material3.Icon
@@ -125,7 +126,7 @@ private fun GripHandle(modifier: Modifier = Modifier, onEnd: (Float, Float) -> U
 }
 
 // ---------------------------------------------------------------------------------------------
-// Barra da timeline: pega + menu + "+" | camadas, cenários e frames | câmara, cor, onion
+// Barra da timeline: menu e "+" | camadas, cenários e frames | câmara, Studio, ajustar; cor e onion; referência
 // ---------------------------------------------------------------------------------------------
 
 @Composable
@@ -137,6 +138,11 @@ internal fun TopBar(
     onMenu: () -> Unit,
     onAdd: () -> Unit,
     onCamera: () -> Unit,
+    onStudio: () -> Unit,
+    onFit: () -> Unit,
+    onReference: () -> Unit,
+    onReferenceLong: () -> Unit,
+    refActive: Boolean,
     onColor: (ColorMethod) -> Unit,
     onOnionOptions: () -> Unit,
     onLayerOptions: (Layer) -> Unit,
@@ -282,13 +288,18 @@ internal fun TopBar(
             }
         }
         Column(verticalArrangement = Arrangement.spacedBy(3.dp), horizontalAlignment = Alignment.End) {
+            // Câmara, Studio (curvas; em breve) e ajustar à folha.
             Row(horizontalArrangement = Arrangement.spacedBy(3.dp), verticalAlignment = Alignment.CenterVertically) {
                 ToolCell(width = 30.dp, height = 30.dp, selected = cameraActive, onClick = onCamera) { Icon(Icons.Default.Videocam, "Câmara", tint = it, modifier = Modifier.size(17.dp)) }
-                // Amostra da cor: toque abre o seletor; arrastar para a folha pinta a região onde se solta.
+                ToolCell(width = 30.dp, height = 30.dp, onClick = onStudio) { Icon(Icons.Default.ShowChart, "Studio", tint = it, modifier = Modifier.size(17.dp)) }
+                ToolCell(width = 30.dp, height = 30.dp, onClick = onFit) { Icon(Icons.Default.FitScreen, "Ajustar à folha", tint = it, modifier = Modifier.size(17.dp)) }
+            }
+            // Cor (círculo): toque abre a roda de cores; arrastar para a folha pinta a região onde se solta. Onion ao lado.
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(3.dp)) {
                 CheckerBox(
                     Color(st.colorArgb),
-                    Modifier.size(width = 38.dp, height = 30.dp).clip(RoundedCornerShape(9.dp))
-                        .border(2.dp, StudioColors.Ink, RoundedCornerShape(9.dp))
+                    Modifier.size(30.dp).clip(CircleShape)
+                        .border(2.dp, StudioColors.Ink, CircleShape)
                         .onGloballyPositioned { swatchRoot = it.positionInRoot() }
                         .pointerInput(Unit) {
                             var cur = Offset.Zero
@@ -304,12 +315,7 @@ internal fun TopBar(
                         }
                         .clickable { onColor(ColorMethod.DISC) }
                 )
-                ToolCell(width = 28.dp, height = 30.dp, onClick = { onColor(ColorMethod.PALETTE) }) { PaletteGlyph(it, Modifier.size(16.dp)) }
-                ToolCell(width = 28.dp, height = 30.dp, onClick = { onColor(ColorMethod.RGB) }) { RgbGlyph(it, Modifier.size(16.dp)) }
-                ToolCell(width = 28.dp, height = 30.dp, onClick = { onColor(ColorMethod.DISC) }) { HsbGlyph(Modifier.size(16.dp)) }
-            }
-            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(2.dp)) {
-                Box(Modifier.size(width = 22.dp, height = 28.dp).clickable(onClick = onOnionOptions), contentAlignment = Alignment.Center) {
+                Box(Modifier.size(width = 20.dp, height = 28.dp).clickable(onClick = onOnionOptions), contentAlignment = Alignment.Center) {
                     DotsGlyph(StudioColors.InkDim)
                 }
                 val shape = RoundedCornerShape(9.dp)
@@ -320,6 +326,10 @@ internal fun TopBar(
                         .clickable { st.onionOn = !st.onionOn }.padding(horizontal = 12.dp),
                     contentAlignment = Alignment.Center,
                 ) { Text("Onion", style = StudioType.Label.copy(fontSize = 11.sp)) }
+            }
+            // Janela de referência: toque mostra ou esconde; toque longo troca a imagem.
+            ToolCell(width = 30.dp, height = 28.dp, selected = refActive, onLongClick = onReferenceLong, onClick = onReference) {
+                Icon(Icons.Default.Image, "Referência", tint = it, modifier = Modifier.size(17.dp))
             }
         }
     }
@@ -348,20 +358,18 @@ internal fun ExpandTab(expanded: Boolean, atBottom: Boolean, onSet: (Boolean) ->
 }
 
 // ---------------------------------------------------------------------------------------------
-// Painel de ferramentas compacto (grelha de 2 colunas)
+// Painel de ferramentas compacto (grelha de 2 colunas), como no esboço:
+//   pincel | borracha / laço | novo frame / desfazer | refazer / reproduzir / frame anterior | seguinte
 // ---------------------------------------------------------------------------------------------
 
 @Composable
 internal fun ToolPanel(
     st: EditorState,
-    fps: Int,
-    onFpsEdit: () -> Unit,
-    onFpsStep: (Int) -> Unit,
     onToolTap: (Tool) -> Unit,
     onToolLibrary: (Tool) -> Unit,
     onToolSettings: (Tool) -> Unit,
     onAddFrame: () -> Unit,
-    onCycleMode: () -> Unit,
+    onPlayLong: () -> Unit,
     onGripEnd: (Float, Float) -> Unit,
 ) {
     Column(
@@ -385,34 +393,20 @@ internal fun ToolPanel(
                 ) { EraserGlyph(it, Modifier.size(17.dp)) }
             }
             Row(horizontalArrangement = Arrangement.spacedBy(3.dp)) {
-                ToolCell(
-                    selected = st.tool == Tool.BUCKET, onDoubleClick = { onToolSettings(Tool.BUCKET) }, onClick = { onToolTap(Tool.BUCKET) },
-                ) { Icon(Icons.Default.FormatColorFill, "Balde de tinta", tint = it, modifier = Modifier.size(17.dp)) }
                 ToolCell(selected = st.tool == Tool.LASSO, onClick = { onToolTap(Tool.LASSO) }) { LassoGlyph(it, Modifier.size(17.dp)) }
+                ToolCell(onClick = onAddFrame) { Text("+", style = StudioType.Title.copy(fontSize = 18.sp, color = it)) }
             }
             Row(horizontalArrangement = Arrangement.spacedBy(3.dp)) {
                 ToolCell(enabled = st.history.canUndo && !st.playing, onClick = { st.undo() }) { Icon(Icons.Default.Undo, "Desfazer", tint = it, modifier = Modifier.size(17.dp)) }
                 ToolCell(enabled = st.history.canRedo && !st.playing, onClick = { st.redo() }) { Icon(Icons.Default.Redo, "Refazer", tint = it, modifier = Modifier.size(17.dp)) }
             }
-            Row(horizontalArrangement = Arrangement.spacedBy(3.dp)) {
-                ToolCell(onClick = onFpsEdit) { Text("FPS", style = StudioType.Caption.copy(fontSize = 9.sp, color = StudioColors.Ink)) }
-                ToolCell(onClick = onFpsEdit) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text("$fps", style = StudioType.Number.copy(fontSize = 12.sp), modifier = Modifier.padding(start = 3.dp))
-                        Column {
-                            Icon(Icons.Default.KeyboardArrowUp, "Mais FPS", tint = it, modifier = Modifier.size(13.dp).clickable { onFpsStep(1) })
-                            Icon(Icons.Default.KeyboardArrowDown, "Menos FPS", tint = it, modifier = Modifier.size(13.dp).clickable { onFpsStep(-1) })
-                        }
-                    }
-                }
+            // Reproduzir (toque longo: FPS e modo de reprodução).
+            ToolCell(width = 67.dp, height = 40.dp, selected = st.playing, onLongClick = onPlayLong, onClick = { st.togglePlay() }) {
+                Icon(if (st.playing) Icons.Default.Pause else Icons.Default.PlayArrow, if (st.playing) "Parar" else "Reproduzir", tint = it, modifier = Modifier.size(20.dp))
             }
             Row(horizontalArrangement = Arrangement.spacedBy(3.dp)) {
                 ToolCell(enabled = st.project.currentFrame > 0 && !st.playing, onClick = { st.go(-1) }) { TriangleGlyph(it, true, Modifier.size(14.dp)) }
                 ToolCell(enabled = st.project.currentFrame < st.project.frameCount - 1 && !st.playing, onClick = { st.go(1) }) { TriangleGlyph(it, false, Modifier.size(14.dp)) }
-            }
-            ToolCell(width = 67.dp, onClick = onAddFrame) { Text("+", style = StudioType.Title.copy(fontSize = 18.sp, color = it)) }
-            ToolCell(width = 67.dp, selected = st.playing, onLongClick = onCycleMode, onClick = { st.togglePlay() }) {
-                Icon(if (st.playing) Icons.Default.Pause else Icons.Default.PlayArrow, if (st.playing) "Parar" else "Reproduzir", tint = it, modifier = Modifier.size(18.dp))
             }
         }
     }
