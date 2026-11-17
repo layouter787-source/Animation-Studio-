@@ -1,8 +1,9 @@
 package com.animationstudio.ui
 
 import android.content.Context
+import com.animationstudio.domain.RecentItems
 
-/** Preferências do estúdio (SharedPreferences): caneta, rejeição de palma, posição das barras, estabilizador, suavização, pontas, pixelização e tinta do balde. */
+/** Preferências do estúdio (SharedPreferences): caneta, rejeição de palma, posição das barras, estabilizador, suavização, pontas, pixelização, tinta do balde e pincéis recentes. */
 internal class Prefs(context: Context) {
     private val sp = context.getSharedPreferences("studio", Context.MODE_PRIVATE)
 
@@ -57,4 +58,16 @@ internal class Prefs(context: Context) {
     var inkPercent: Int
         get() = sp.getInt("inkPercent2", 8).coerceIn(0, 100)
         set(v) { val c = v.coerceIn(0, 100); sp.edit().putInt("inkPercent2", c).apply(); StudioRender.inkPercent = c }
+
+    /** Pincéis e borrachas usados há pouco (ids), o mais recente primeiro; no máximo [RecentItems.DEFAULT_MAX]. */
+    var recentBrushes: List<String>
+        get() = RecentItems.decode(sp.getString("recentBrushes", ""))
+        set(v) { sp.edit().putString("recentBrushes", RecentItems.encode(v.take(RecentItems.DEFAULT_MAX))).apply() }
+
+    /** Regista [id] como o pincel mais recente e devolve a lista atualizada. */
+    fun pushRecentBrush(id: String): List<String> {
+        val next = RecentItems.push(recentBrushes, id)
+        recentBrushes = next
+        return next
+    }
 }
