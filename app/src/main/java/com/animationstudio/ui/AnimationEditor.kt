@@ -10,6 +10,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
@@ -144,6 +145,9 @@ private sealed interface EditorDialog {
     data object Organize : EditorDialog
 }
 
+/** Painel de ferramenta aberto no lugar da barra de ferramentas (a barra fecha e o painel abre). */
+private enum class SidePanel { LASSO }
+
 private fun DrawTransform.applyView(v: ViewTransform) {
     translate(v.tx, v.ty)
     rotate(v.rotationDegrees, Offset.Zero)
@@ -275,6 +279,7 @@ fun AnimationEditor(meta: ProjectMeta, initial: Project, store: ProjectStore, on
     var canvasRoot by remember { mutableStateOf(Offset.Zero) }
     var rootSize by remember { mutableStateOf(IntSize.Zero) }
     var dialog by remember { mutableStateOf<EditorDialog?>(null) }
+    var sidePanel by remember { mutableStateOf<SidePanel?>(null) }
     var dragPos by remember { mutableStateOf<Offset?>(null) }
     var refImage by remember { mutableStateOf<ImageBitmap?>(null) }
     var refVisible by remember { mutableStateOf(true) }
@@ -407,6 +412,7 @@ fun AnimationEditor(meta: ProjectMeta, initial: Project, store: ProjectStore, on
                 cameraMode = false
                 camView = false
                 st.selectTool(Tool.LASSO)
+                sidePanel = SidePanel.LASSO
                 st.beginFloating(img, st.activeLayerId)
                 toast("Ajuste a imagem e confirme")
             }
@@ -492,6 +498,11 @@ fun AnimationEditor(meta: ProjectMeta, initial: Project, store: ProjectStore, on
                 cameraMode = !cameraMode
                 if (!cameraMode) camView = false
             },
+            onStudio = { toast("Modo Studio: em breve") },
+            onFit = { st.view = ViewTransform.fitSheet(sw, sh, canvasSize.width.toFloat(), canvasSize.height.toFloat(), 12f) },
+            onReference = { if (refImage == null) refLauncher.launch("image/*") else refVisible = !refVisible },
+            onReferenceLong = { refLauncher.launch("image/*") },
+            refActive = refImage != null && refVisible,
             onColor = { dialog = EditorDialog.ColorPicker(it) },
             onOnionOptions = { dialog = EditorDialog.Onion },
             onLayerOptions = { dialog = EditorDialog.LayerOptions(it.id) },
@@ -516,28 +527,52 @@ fun AnimationEditor(meta: ProjectMeta, initial: Project, store: ProjectStore, on
 
     val toolPanel: @Composable () -> Unit = {
         ToolPanel(
-            st = st, fps = fps,
-            onFpsEdit = { dialog = EditorDialog.FpsEdit },
-            onFpsStep = { fps = (fps + it).coerceIn(1, 120) },
+            st = st,
             onToolTap = { t ->
-                if (t == st.tool && (t == Tool.BRUSH || t == Tool.ERASER)) dialog = EditorDialog.BrushLibrary(t) else st.selectTool(t)
+                when {
+                    // Laço: a barra de ferramentas fecha e abre o painel da seleção.
+                    t == Tool.LASSO -> { st.selectTool(Tool.LASSO); sidePanel = SidePanel.LASSO }
+                    t == st.tool && (t == Tool.BRUSH || t == Tool.ERASER) -> dialog = EditorDialog.BrushLibrary(t)
+                    else -> st.selectTool(t)
+                }
             },
             onToolLibrary = { t ->
                 if (t == Tool.BRUSH || t == Tool.ERASER) { st.selectTool(t); dialog = EditorDialog.BrushLibrary(t) }
             },
             onToolSettings = { t ->
                 st.selectTool(t)
-                dialog = if (t == Tool.BUCKET) EditorDialog.BucketSettings
-                else if (t == Tool.BRUSH || t == Tool.ERASER) EditorDialog.BrushSettings(t) else null
+                dialog = if (t == Tool.BRUSH || t == Tool.ERASER) EditorDialog.BrushSettings(t) else null
             },
             onAddFrame = { st.edit { p -> p.insertFrameAt(p.currentFrame + 1) } },
-            onCycleMode = {
-                st.playMode = PlayMode.values()[(st.playMode.ordinal + 1) % PlayMode.values().size]
-                toast("Reprodução: " + when (st.playMode) { PlayMode.ONCE -> "uma vez"; PlayMode.LOOP -> "loop"; PlayMode.PING_PONG -> "ping-pong" })
-            },
+            onPlayLong = { dialog = EditorDialog.FpsEdit },
             onGripEnd = onToolsGrip,
         )
     }
+
+    val selectionPanel: @Composable () -> Unit = {
+        SelectionPanel(
+            hasSelection = st.floating != null,
+            canPaste = st.clipImage != null,
+            perspectiveOn = st.quad != null,
+            busy = st.busyLift,
+            // Tocar no ícone do laço fixa a seleção, fecha o painel e volta à barra de ferramentas.
+            onClose = { st.commitFloating(); sidePanel = null; st.selectTool(Tool.BRUSH) },
+            onSelectAll = {
+                st.commitFloating()
+                requestLift(listOf(Point(0f, 0f), Point(sw, 0f), Point(sw, sh), Point(0f, sh)))
+            },
+            onSelectNone = { st.commitFloating() },
+            onCopy = { st.copyFloating(); toast("Copiado") },
+            onPaste = { st.pasteClip(st.view.screenToProject(Point(canvasSize.width / 2f, canvasSize.height / 2f))) },
+            onFlipH = { st.flipFloatingH() },
+            onFlipV = { st.flipFloatingV() },
+            onPerspective = { st.togglePerspective() },
+            onMesh = { toast("Malha: em breve") },
+        )
+    }
+
+    // A coluna da esquerda (ou direita) mostra a barra de ferramentas ou, quando está aberto, o painel da ferramenta.
+    val sideColumn: @Composable () -> Unit = { if (sidePanel != null) selectionPanel() else toolPanel() }
 
     // Câmara do frame atual (para o enquadramento de edição) e a que se vê ao reproduzir ou em "ver pela câmara".
     val camKey = CameraMath.at(st.project.frameIds, camera, st.project.currentFrame.toFloat(), sw, sh)
@@ -547,7 +582,7 @@ fun AnimationEditor(meta: ProjectMeta, initial: Project, store: ProjectStore, on
         Column(Modifier.fillMaxSize()) {
             if (!st.timelineBottom) timelineBar()
             Row(Modifier.weight(1f).fillMaxWidth()) {
-                if (!st.toolsRight) toolPanel()
+                if (!st.toolsRight) sideColumn()
                 Box(
                     Modifier.weight(1f).fillMaxHeight()
                         .padding(
@@ -827,12 +862,8 @@ fun AnimationEditor(meta: ProjectMeta, initial: Project, store: ProjectStore, on
                                                     lastRawS = Point(ch.position.x, ch.position.y)
                                                     pushPoint(st.view.screenToProject(stab.next(lastRawS, ch.uptimeMillis)))
                                                 } else {
-                                                    val raw = st.view.screenToProject(Point(ch.position.x, ch.position.y))
-                                                    when (st.lassoShape) {
-                                                        LassoShape.FREE -> pushPoint(raw)
-                                                        LassoShape.RECT -> { st.activePoints.clear(); st.activePoints.addAll(Lasso.rectangle(startProj, raw)) }
-                                                        LassoShape.ELLIPSE -> { st.activePoints.clear(); st.activePoints.addAll(Lasso.ellipse(startProj, raw)) }
-                                                    }
+                                                    // Laço: sempre contorno livre desenhado com o dedo.
+                                                    pushPoint(st.view.screenToProject(Point(ch.position.x, ch.position.y)))
                                                 }
                                             } else if (floatMode != 0 && !multi) {
                                                 val fl = st.floating
@@ -893,7 +924,7 @@ fun AnimationEditor(meta: ProjectMeta, initial: Project, store: ProjectStore, on
                                 } else if (drawing && lassoDraw) {
                                     val poly = st.activePoints.toList()
                                     st.activePoints.clear()
-                                    if (poly.size >= 3 && (st.lassoShape == LassoShape.FREE || moved)) requestLift(poly)
+                                    if (poly.size >= 3) requestLift(poly)
                                 } else if (tool == Tool.BUCKET && !multi && !moved && !rejected && !navOnly) {
                                     requestFill(startProj)
                                 } else {
@@ -902,17 +933,7 @@ fun AnimationEditor(meta: ProjectMeta, initial: Project, store: ProjectStore, on
                             }
                         }
                     )
-                    // Controlos sobre a folha.
-                    ToolCell(
-                        width = 30.dp, height = 30.dp, modifier = Modifier.align(Alignment.TopEnd).padding(8.dp),
-                        onClick = { st.view = ViewTransform.fitSheet(sw, sh, canvasSize.width.toFloat(), canvasSize.height.toFloat(), 12f) },
-                    ) { Icon(Icons.Default.FitScreen, "Ajustar à folha", tint = it) }
-                    ToolCell(
-                        width = 30.dp, height = 30.dp, selected = refImage != null && refVisible,
-                        modifier = Modifier.align(Alignment.TopEnd).padding(top = 44.dp, end = 8.dp),
-                        onLongClick = { refLauncher.launch("image/*") },
-                        onClick = { if (refImage == null) refLauncher.launch("image/*") else refVisible = !refVisible },
-                    ) { Icon(Icons.Default.Image, "Referência", tint = it, modifier = Modifier.size(18.dp)) }
+                    // Câmara: painel por cima da folha. (Ajustar à folha e referência estão agora na barra de cima.)
                     if (cameraMode) {
                         val curKey = camera.keys[st.project.currentFrameId]
                         CameraPanel(
@@ -931,37 +952,6 @@ fun AnimationEditor(meta: ProjectMeta, initial: Project, store: ProjectStore, on
                             onClose = { cameraMode = false; camView = false },
                             modifier = Modifier.align(Alignment.TopCenter).padding(top = 8.dp),
                         )
-                    } else if (st.tool == Tool.LASSO) {
-                        Column(
-                            Modifier.align(Alignment.TopCenter).padding(top = 8.dp).studioCard(12.dp).padding(3.dp),
-                            verticalArrangement = Arrangement.spacedBy(3.dp),
-                            horizontalAlignment = Alignment.CenterHorizontally,
-                        ) {
-                            Row(horizontalArrangement = Arrangement.spacedBy(3.dp)) {
-                                OverlayIconChip(Icons.Default.Gesture, "Livre", selected = st.lassoShape == LassoShape.FREE) { st.lassoShape = LassoShape.FREE }
-                                OverlayIconChip(Icons.Default.CropSquare, "Retângulo", selected = st.lassoShape == LassoShape.RECT) { st.lassoShape = LassoShape.RECT }
-                                OverlayIconChip(Icons.Default.RadioButtonUnchecked, "Elipse", selected = st.lassoShape == LassoShape.ELLIPSE) { st.lassoShape = LassoShape.ELLIPSE }
-                                if (st.clipImage != null) {
-                                    OverlayIconChip(Icons.Default.ContentPaste, "Colar") {
-                                        st.pasteClip(st.view.screenToProject(Point(canvasSize.width / 2f, canvasSize.height / 2f)))
-                                    }
-                                }
-                            }
-                            if (st.floating != null) {
-                                Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(3.dp)) {
-                                    OverlayIconChip(Icons.Default.Transform, "Perspetiva", selected = st.quad != null) { st.togglePerspective() }
-                                    OverlayIconChip(Icons.Default.Flip, "Virar na horizontal") { st.flipFloatingH() }
-                                    OverlayIconChip(Icons.Default.Flip, "Virar na vertical", iconRotation = 90f) { st.flipFloatingV() }
-                                    OverlayIconChip(Icons.Default.RotateRight, "Rodar 45°") { st.rotateFloating(45f) }
-                                    OverlayIconChip(Icons.Default.ContentCopy, "Copiar") { st.copyFloating() }
-                                    OverlayIconChip(Icons.Default.ContentCut, "Cortar") { st.cutFloating() }
-                                    OverlayIconChip(Icons.Default.ControlPointDuplicate, "Duplicar") { st.duplicateFloating() }
-                                    OverlayIconChip(Icons.Default.RestartAlt, "Repor") { st.resetFloating() }
-                                    OverlayIconChip(Icons.Default.Close, "Não confirmar", danger = true) { st.discardFloating() }
-                                    OverlayIconChip(Icons.Default.Check, "Confirmar", selected = true) { st.commitFloating() }
-                                }
-                            }
-                        }
                     }
                     // Estado solto, sem cartão: só o zoom e os avisos de trabalho em curso.
                     Row(
@@ -973,7 +963,7 @@ fun AnimationEditor(meta: ProjectMeta, initial: Project, store: ProjectStore, on
                         if (st.busyLift) Text("A SELECIONAR…", style = StudioType.Caption.copy(fontSize = 9.sp, color = StudioColors.Accent))
                     }
                 }
-                if (st.toolsRight) toolPanel()
+                if (st.toolsRight) sideColumn()
             }
             if (st.timelineBottom) timelineBar()
         }
@@ -1138,7 +1128,8 @@ fun AnimationEditor(meta: ProjectMeta, initial: Project, store: ProjectStore, on
         )
         EditorDialog.FpsEdit -> {
             var text by remember { mutableStateOf(fps.toString()) }
-            StudioDialog("FPS do projeto", { dialog = null }, "OK", {
+            // Toque longo em Reproduzir: FPS do projeto e modo de reprodução.
+            StudioDialog("Reprodução", { dialog = null }, "OK", {
                 val v = text.toIntOrNull()
                 if (v != null && v in 1..120) { fps = v; dialog = null } else toast("Use um valor entre 1 e 120")
             }) {
@@ -1147,6 +1138,17 @@ fun AnimationEditor(meta: ProjectMeta, initial: Project, store: ProjectStore, on
                     label = { Text("FPS (1–120)") }, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                     modifier = Modifier.fillMaxWidth()
                 )
+                Row(Modifier.fillMaxWidth().padding(top = 8.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    for ((label, m) in listOf("Uma vez" to PlayMode.ONCE, "Loop" to PlayMode.LOOP, "Ping-pong" to PlayMode.PING_PONG)) {
+                        val sel = st.playMode == m
+                        Box(
+                            Modifier.weight(1f).clip(RoundedCornerShape(9.dp))
+                                .background(if (sel) StudioColors.Accent else StudioColors.Surface2)
+                                .clickable { st.playMode = m }.padding(vertical = 8.dp),
+                            contentAlignment = Alignment.Center,
+                        ) { Text(label, style = StudioType.Label.copy(fontSize = 11.sp)) }
+                    }
+                }
             }
         }
     }
