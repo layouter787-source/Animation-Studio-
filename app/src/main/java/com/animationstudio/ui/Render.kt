@@ -1,7 +1,6 @@
 package com.animationstudio.ui
 
 import android.graphics.Bitmap
-import android.graphics.BitmapFactory
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.geometry.Size
@@ -148,16 +147,19 @@ private fun renderRaster(strokes: List<BrushStroke>, sw: Int, sh: Int, base: Lay
     val rh = max(1, (sh * k).roundToInt())
     val bmp = ImageBitmap(rw, rh)
     val canvas = GfxCanvas(bmp)
-    CanvasDrawScope().draw(Density(1f), LayoutDirection.Ltr, canvas, Size(rw.toFloat(), rh.toFloat())) {
-        if (base != null) {
-            // Cria a imagem nova a partir da anterior e acrescenta só o último traço.
-            drawImage(base.bmp, blendMode = BlendMode.Src)
-            withTransform({ scale(rw / sw.toFloat(), rh / sh.toFloat(), Offset.Zero) }) {
-                clipRect(0f, 0f, sw.toFloat(), sh.toFloat()) { drawElement(strokes.last(), null, true) }
-            }
-        } else {
-            withTransform({ scale(rw / sw.toFloat(), rh / sh.toFloat(), Offset.Zero) }) {
-                clipRect(0f, 0f, sw.toFloat(), sh.toFloat()) { drawElements(strokes, null, true) }
+    // A escala real desta imagem decide que versão reduzida das imagens (seleções do laço) se usa ao desenhá-las.
+    ImageScale.with(rw / sw.toFloat()) {
+        CanvasDrawScope().draw(Density(1f), LayoutDirection.Ltr, canvas, Size(rw.toFloat(), rh.toFloat())) {
+            if (base != null) {
+                // Cria a imagem nova a partir da anterior e acrescenta só o último traço.
+                drawImage(base.bmp, blendMode = BlendMode.Src)
+                withTransform({ scale(rw / sw.toFloat(), rh / sh.toFloat(), Offset.Zero) }) {
+                    clipRect(0f, 0f, sw.toFloat(), sh.toFloat()) { drawElement(strokes.last(), null, true) }
+                }
+            } else {
+                withTransform({ scale(rw / sw.toFloat(), rh / sh.toFloat(), Offset.Zero) }) {
+                    clipRect(0f, 0f, sw.toFloat(), sh.toFloat()) { drawElements(strokes, null, true) }
+                }
             }
         }
     }
@@ -1254,15 +1256,24 @@ internal fun DrawScope.drawFillElement(s: BrushStroke, tint: Color?, useCache: B
     }
 }
 
-private fun decodePng(png: ByteArray): ImageBitmap? = BitmapFactory.decodeByteArray(png, 0, png.size)?.asImageBitmap()
-
+/**
+ * Desenha uma imagem da folha (seleção do laço, importação). Escolhe a versão da imagem cuja resolução fica mais
+ * perto da que a saída precisa ([ImageScale]): uma seleção levantada a 2–4× e vista a 1× usa a versão reduzida
+ * (média 2×2) em vez de amostrar píxeis soltos, por isso não há serrilhado. Ao ampliar usa a original.
+ */
 internal fun DrawScope.drawImageData(im: ImageData, tint: Color?, useCache: Boolean) {
-    val cached = im.source.cache as? ImageBitmap
-    val img = cached ?: (decodePng(im.source.png)?.also { if (useCache) im.source.cache = it }) ?: return
     val m = im.m
+    val level = ImageMips.levelFor(m.scaleFactor * ImageScale.current())
+    val bmp = ImageMips.get(im.source, level, useCache) ?: return
+    val img = bmp.asImageBitmap()
     val matrix = Matrix(floatArrayOf(m.a, m.b, 0f, 0f, m.c, m.d, 0f, 0f, 0f, 0f, 1f, 0f, m.tx, m.ty, 0f, 1f))
     val filter = if (tint != null) ColorFilter.tint(tint, BlendMode.SrcIn) else null
-    withTransform({ transform(matrix) }) { drawImage(img, colorFilter = filter) }
+    // A versão reduzida tem 1/2^nível dos píxeis: amplia-se de volta para ocupar o mesmo espaço.
+    val up = (1 shl level).toFloat()
+    withTransform({
+        transform(matrix)
+        if (level > 0) scale(up, up, Offset.Zero)
+    }) { drawImage(img, colorFilter = filter) }
 }
 
 internal fun DrawScope.drawElement(s: BrushStroke, tint: Color?, useCache: Boolean) {
@@ -1372,11 +1383,13 @@ internal fun DrawScope.drawOnionFrame(project: Project, frameId: Long, sw: Float
 /** Miniatura de um desenho (para as células da timeline). O DrawScope deve ter o tamanho da miniatura. */
 internal fun DrawScope.drawThumbnail(strokes: List<BrushStroke>, sw: Float, sh: Float) {
     val k = size.width / sw
-    withTransform({ scale(k, k, Offset.Zero) }) {
-        clipRect(0f, 0f, sw, sh) {
-            drawContext.canvas.saveLayer(Rect(0f, 0f, sw, sh), Paint())
-            drawElements(strokes, null, true)
-            drawContext.canvas.restore()
+    ImageScale.with(k) {
+        withTransform({ scale(k, k, Offset.Zero) }) {
+            clipRect(0f, 0f, sw, sh) {
+                drawContext.canvas.saveLayer(Rect(0f, 0f, sw, sh), Paint())
+                drawElements(strokes, null, true)
+                drawContext.canvas.restore()
+            }
         }
     }
 }
@@ -1394,11 +1407,13 @@ internal fun renderComposite(
 ): ImageBitmap {
     val bmp = ImageBitmap(outW, outH)
     val canvas = GfxCanvas(bmp)
-    CanvasDrawScope().draw(Density(1f), LayoutDirection.Ltr, canvas, Size(outW.toFloat(), outH.toFloat())) {
-        if (background != null) drawRect(background)
-        withTransform({ scale(outW / sw.toFloat(), outH / sh.toFloat(), Offset.Zero) }) {
-            clipRect(0f, 0f, sw.toFloat(), sh.toFloat()) {
-                drawFrameLayers(project, project.frameIds[frameIndex], sw.toFloat(), sh.toFloat(), null, null, useCache)
+    ImageScale.with(outW / sw.toFloat()) {
+        CanvasDrawScope().draw(Density(1f), LayoutDirection.Ltr, canvas, Size(outW.toFloat(), outH.toFloat())) {
+            if (background != null) drawRect(background)
+            withTransform({ scale(outW / sw.toFloat(), outH / sh.toFloat(), Offset.Zero) }) {
+                clipRect(0f, 0f, sw.toFloat(), sh.toFloat()) {
+                    drawFrameLayers(project, project.frameIds[frameIndex], sw.toFloat(), sh.toFloat(), null, null, useCache)
+                }
             }
         }
     }

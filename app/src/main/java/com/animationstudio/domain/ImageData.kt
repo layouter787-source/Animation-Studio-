@@ -4,6 +4,9 @@ package com.animationstudio.domain
 class ImageSource(val png: ByteArray, val w: Int, val h: Int) {
     var cache: Any? = null
 
+    /** Versões reduzidas (metade, quarto…) da imagem, para desenhar sem serrilhado quando a imagem é reduzida. Só da UI. */
+    var mips: Any? = null
+
     override fun equals(other: Any?): Boolean =
         other is ImageSource && w == other.w && h == other.h && png.contentEquals(other.png)
 

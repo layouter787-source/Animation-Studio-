@@ -33,17 +33,21 @@ internal fun renderCompositeWithCamera(
 ): ImageBitmap {
     val bmp = ImageBitmap(outW, outH)
     val canvas = GfxCanvas(bmp)
-    CanvasDrawScope().draw(Density(1f), LayoutDirection.Ltr, canvas, Size(outW.toFloat(), outH.toFloat())) {
-        drawRect(Color.White)
-        withTransform({ scale(outW / sw.toFloat(), outH / sh.toFloat(), Offset.Zero) }) {
-            clipRect(0f, 0f, sw.toFloat(), sh.toFloat()) {
-                val fid = project.frameIds[frameIndex]
-                if (camera != null) {
-                    withTransform({ transform(affineMatrix(camera)) }) {
+    // Escala real (píxeis de saída por unidade da folha), com o zoom da câmara: decide que versão reduzida das imagens usar.
+    val outScale = outW / sw.toFloat() * (camera?.scaleFactor ?: 1f)
+    ImageScale.with(outScale) {
+        CanvasDrawScope().draw(Density(1f), LayoutDirection.Ltr, canvas, Size(outW.toFloat(), outH.toFloat())) {
+            drawRect(Color.White)
+            withTransform({ scale(outW / sw.toFloat(), outH / sh.toFloat(), Offset.Zero) }) {
+                clipRect(0f, 0f, sw.toFloat(), sh.toFloat()) {
+                    val fid = project.frameIds[frameIndex]
+                    if (camera != null) {
+                        withTransform({ transform(affineMatrix(camera)) }) {
+                            drawFrameLayers(project, fid, sw.toFloat(), sh.toFloat(), null, null, false)
+                        }
+                    } else {
                         drawFrameLayers(project, fid, sw.toFloat(), sh.toFloat(), null, null, false)
                     }
-                } else {
-                    drawFrameLayers(project, fid, sw.toFloat(), sh.toFloat(), null, null, false)
                 }
             }
         }
