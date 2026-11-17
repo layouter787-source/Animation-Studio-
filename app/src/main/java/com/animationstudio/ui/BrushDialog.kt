@@ -111,11 +111,46 @@ private fun ToggleRow(label: String, checked: Boolean, onChange: (Boolean) -> Un
     }
 }
 
+/** Separadores do painel: lista completa, usados há pouco e importados pelo utilizador. */
+private enum class BrushTab { LIST, RECENT, CUSTOM }
+
+private fun matchesQuery(p: BrushPreset, query: String): Boolean {
+    val q = query.trim()
+    return q.isEmpty() || p.name.contains(q, ignoreCase = true) || p.category.contains(q, ignoreCase = true)
+}
+
+/** Uma linha da lista: pré-visualização renderizada, nome, categoria e os três pontos (abrem as definições). */
+@Composable
+private fun BrushRow(p: BrushPreset, selected: Boolean, onClick: () -> Unit) {
+    Row(
+        Modifier.fillMaxWidth().height(46.dp).clip(RoundedCornerShape(10.dp))
+            .background(if (selected) StudioColors.AccentSoft else StudioColors.Surface2)
+            .border(1.dp, if (selected) StudioColors.Accent else StudioColors.Outline, RoundedCornerShape(10.dp))
+            .clickable { onClick() },
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Canvas(
+            Modifier.width(104.dp).fillMaxHeight().graphicsLayer { compositingStrategy = CompositingStrategy.Offscreen }
+        ) { drawBrushSample(p, p.defaultSize, p.defaultOpacity, StudioColors.Ink) }
+        Column(Modifier.weight(1f).padding(horizontal = 6.dp)) {
+            Text(p.name, style = StudioType.Label.copy(fontSize = 12.sp), maxLines = 1)
+            Text(p.category.uppercase(), style = StudioType.Caption.copy(fontSize = 8.sp))
+        }
+        Box(
+            Modifier.size(width = 36.dp, height = 46.dp).clickable { onClick() },
+            contentAlignment = Alignment.Center,
+        ) { DotsGlyph(StudioColors.Ink, Modifier.size(16.dp)) }
+    }
+}
+
 /**
- * Biblioteca de pincéis/borrachas (como no esboço): aba, pesquisa, categorias e lista com pré-visualização
- * renderizada. Tocar num pincel escolhe-o e abre logo as definições dele (tamanho, opacidade, suavização,
- * smoothing, pontas); os três pontos fazem o mesmo. O botão "+" importa uma imagem do telemóvel (PNG, JPG, com ou
- * sem transparência) como ponta de um pincel novo, na categoria "Meus pincéis".
+ * Painel de pincéis/borrachas com três separadores:
+ *  - PINCÉIS: a lista completa, com pesquisa e categorias;
+ *  - RECENTES: os que usou há pouco (o último escolhido primeiro), guardados no telemóvel;
+ *  - PERSONALIZADOS: os que importou de imagens (botão "+").
+ * A pesquisa vale para o separador aberto. Tocar num pincel escolhe-o, regista-o nos recentes e abre logo as
+ * definições dele (tamanho, opacidade, suavização, smoothing, pontas); os três pontos fazem o mesmo.
+ * Para as borrachas só há PINCÉIS (aqui "Borrachas") e RECENTES.
  */
 @Composable
 internal fun BrushLibraryDialog(
@@ -126,9 +161,12 @@ internal fun BrushLibraryDialog(
     onDismiss: () -> Unit,
 ) {
     val ctx = LocalContext.current
+    val prefs = remember { Prefs(ctx) }
     var query by remember { mutableStateOf("") }
     var category by remember { mutableStateOf<String?>(null) }
     var showCats by remember { mutableStateOf(false) }
+    var tab by remember { mutableStateOf(BrushTab.LIST) }
+    var recentIds by remember { mutableStateOf(prefs.recentBrushes) }
     var imported by remember { mutableIntStateOf(0) }
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
         if (uri != null) {
@@ -139,7 +177,7 @@ internal fun BrushLibraryDialog(
                 Toast.LENGTH_SHORT,
             ).show()
             if (name != null) {
-                category = BrushLibrary.CUSTOM
+                tab = BrushTab.CUSTOM
                 showCats = false
             }
             imported++
@@ -148,17 +186,39 @@ internal fun BrushLibraryDialog(
     // Lê o contador para a lista se refazer depois de uma importação.
     val refresh = imported
     val cats = BrushLibrary.categoriesOf(kind)
-    val list = BrushLibrary.search(kind, query, category)
+    val tabs = if (kind == BrushKind.BRUSH) listOf(BrushTab.LIST, BrushTab.RECENT, BrushTab.CUSTOM) else listOf(BrushTab.LIST, BrushTab.RECENT)
+    val list: List<BrushPreset> = when (tab) {
+        BrushTab.LIST -> BrushLibrary.search(kind, query, category)
+        BrushTab.CUSTOM -> BrushLibrary.search(kind, query, BrushLibrary.CUSTOM)
+        BrushTab.RECENT -> recentIds.mapNotNull { BrushLibrary.byIdOrNull(it) }.filter { it.kind == kind && matchesQuery(it, query) }
+    }
     val shape = RoundedCornerShape(16.dp)
+    val choose: (BrushPreset) -> Unit = { p ->
+        recentIds = prefs.pushRecentBrush(p.id)
+        onSettings(p)
+    }
 
     Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
         Column(Modifier.width(380.dp).fillMaxHeight(0.94f)) {
-            Box(
-                Modifier.padding(start = 18.dp).clip(RoundedCornerShape(topStart = 10.dp, topEnd = 10.dp))
-                    .background(StudioColors.Surface3.copy(alpha = PopupAlpha)).padding(horizontal = 16.dp, vertical = 4.dp)
-            ) { Text(if (kind == BrushKind.BRUSH) "PINCÉIS" else "BORRACHAS", style = StudioType.Caption.copy(color = StudioColors.Ink)) }
             Surface(color = StudioColors.Surface.copy(alpha = PopupAlpha), shape = shape, modifier = Modifier.weight(1f).border(1.dp, StudioColors.Outline, shape)) {
                 Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                        for (t in tabs) {
+                            val sel = t == tab
+                            val label = when (t) {
+                                BrushTab.LIST -> if (kind == BrushKind.BRUSH) "Pincéis" else "Borrachas"
+                                BrushTab.RECENT -> "Recentes"
+                                BrushTab.CUSTOM -> "Personalizados"
+                            }
+                            Box(
+                                Modifier.weight(1f).height(34.dp).clip(RoundedCornerShape(10.dp))
+                                    .background(if (sel) StudioColors.Accent else StudioColors.Surface2)
+                                    .border(1.dp, if (sel) StudioColors.Accent else StudioColors.Outline, RoundedCornerShape(10.dp))
+                                    .clickable { tab = t; showCats = false },
+                                contentAlignment = Alignment.Center,
+                            ) { Text(label, style = StudioType.Label.copy(fontSize = 11.sp), maxLines = 1) }
+                        }
+                    }
                     Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
                         Row(
                             Modifier.weight(1f).height(34.dp).clip(RoundedCornerShape(10.dp)).background(StudioColors.Surface2)
@@ -179,15 +239,17 @@ internal fun BrushLibraryDialog(
                                 },
                             )
                         }
-                        Box(
-                            Modifier.height(34.dp).clip(RoundedCornerShape(10.dp))
-                                .background(if (showCats) StudioColors.Accent else StudioColors.Surface2)
-                                .border(1.dp, if (showCats) StudioColors.Accent else StudioColors.Outline, RoundedCornerShape(10.dp))
-                                .clickable { showCats = !showCats }.padding(horizontal = 12.dp),
-                            contentAlignment = Alignment.Center,
-                        ) { Text("Categorias", style = StudioType.Label.copy(fontSize = 11.sp)) }
+                        if (tab == BrushTab.LIST) {
+                            Box(
+                                Modifier.height(34.dp).clip(RoundedCornerShape(10.dp))
+                                    .background(if (showCats) StudioColors.Accent else StudioColors.Surface2)
+                                    .border(1.dp, if (showCats) StudioColors.Accent else StudioColors.Outline, RoundedCornerShape(10.dp))
+                                    .clickable { showCats = !showCats }.padding(horizontal = 12.dp),
+                                contentAlignment = Alignment.Center,
+                            ) { Text("Categorias", style = StudioType.Label.copy(fontSize = 11.sp)) }
+                        }
                         if (kind == BrushKind.BRUSH) {
-                            // Importar uma imagem do telemóvel como pincel (PNG, JPG, com ou sem transparência).
+                            // Importar uma imagem do telemóvel como pincel (PNG com transparência).
                             Box(
                                 Modifier.size(34.dp).clip(RoundedCornerShape(10.dp)).background(StudioColors.Surface2)
                                     .border(1.dp, StudioColors.Outline, RoundedCornerShape(10.dp))
@@ -196,8 +258,15 @@ internal fun BrushLibraryDialog(
                             ) { Icon(Icons.Default.Add, "Importar pincel de imagem", tint = StudioColors.Ink, modifier = Modifier.size(18.dp)) }
                         }
                     }
-                    Text((category ?: "Todos").uppercase(), style = StudioType.Caption)
-                    if (showCats) {
+                    Text(
+                        when (tab) {
+                            BrushTab.LIST -> (category ?: "Todos").uppercase()
+                            BrushTab.RECENT -> "USADOS HÁ POUCO"
+                            BrushTab.CUSTOM -> "IMPORTADOS DE IMAGENS"
+                        },
+                        style = StudioType.Caption,
+                    )
+                    if (tab == BrushTab.LIST && showCats) {
                         LazyColumn(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                             val all = listOf<String?>(null) + cats
                             items(all) { c ->
@@ -215,32 +284,22 @@ internal fun BrushLibraryDialog(
                             }
                         }
                     } else if (list.isEmpty()) {
-                        Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
-                            Text("Nenhum pincel encontrado.", style = StudioType.Body.copy(color = StudioColors.InkDim))
+                        Box(Modifier.weight(1f).fillMaxWidth().padding(horizontal = 12.dp), contentAlignment = Alignment.Center) {
+                            Text(
+                                when {
+                                    query.isNotBlank() -> "Nenhum pincel encontrado."
+                                    tab == BrushTab.RECENT -> "Ainda não usou nenhum pincel. Os que escolher aparecem aqui."
+                                    tab == BrushTab.CUSTOM -> "Sem pincéis personalizados. Toque em + para importar um PNG com transparência como pincel."
+                                    else -> "Nenhum pincel encontrado."
+                                },
+                                style = StudioType.Body.copy(color = StudioColors.InkDim),
+                                textAlign = TextAlign.Center,
+                            )
                         }
                     } else {
                         LazyColumn(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                            items(list, key = { "$refresh-${it.id}" }) { p ->
-                                val sel = p.id == selectedId
-                                Row(
-                                    Modifier.fillMaxWidth().height(46.dp).clip(RoundedCornerShape(10.dp))
-                                        .background(if (sel) StudioColors.AccentSoft else StudioColors.Surface2)
-                                        .border(1.dp, if (sel) StudioColors.Accent else StudioColors.Outline, RoundedCornerShape(10.dp))
-                                        .clickable { onSettings(p) },
-                                    verticalAlignment = Alignment.CenterVertically,
-                                ) {
-                                    Canvas(
-                                        Modifier.width(104.dp).fillMaxHeight().graphicsLayer { compositingStrategy = CompositingStrategy.Offscreen }
-                                    ) { drawBrushSample(p, p.defaultSize, p.defaultOpacity, StudioColors.Ink) }
-                                    Column(Modifier.weight(1f).padding(horizontal = 6.dp)) {
-                                        Text(p.name, style = StudioType.Label.copy(fontSize = 12.sp), maxLines = 1)
-                                        Text(p.category.uppercase(), style = StudioType.Caption.copy(fontSize = 8.sp))
-                                    }
-                                    Box(
-                                        Modifier.size(width = 36.dp, height = 46.dp).clickable { onSettings(p) },
-                                        contentAlignment = Alignment.Center,
-                                    ) { DotsGlyph(StudioColors.Ink, Modifier.size(16.dp)) }
-                                }
+                            items(list, key = { "$refresh-${tab.name}-${it.id}" }) { p ->
+                                BrushRow(p, p.id == selectedId) { choose(p) }
                             }
                         }
                     }
