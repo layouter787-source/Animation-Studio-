@@ -243,7 +243,7 @@ private fun OverlayIconChip(
 ) {
     val shape = RoundedCornerShape(10.dp)
     Box(
-        modifier.size(36.dp).clip(shape)
+        modifier.size(StudioMetrics.Cell).clip(shape)
             .background(if (selected) StudioColors.Accent else StudioColors.Surface.copy(alpha = 0.8f))
             .border(1.dp, if (selected) StudioColors.Accent else StudioColors.Outline, shape)
             .combinedClickable(onClick = onClick),
@@ -488,6 +488,7 @@ fun AnimationEditor(meta: ProjectMeta, initial: Project, store: ProjectStore, on
         else if (dx < -40f) { st.toolsRight = false; prefs.toolsRight = false }
     }
 
+    // Barra da timeline, fina: menu e "+" | camadas e frames | câmara e Studio (cada par, um botão abaixo do outro).
     val timelineBar: @Composable () -> Unit = {
         TopBar(
             st = st, sw = sheetW, sh = sheetH, expanded = expanded,
@@ -499,32 +500,17 @@ fun AnimationEditor(meta: ProjectMeta, initial: Project, store: ProjectStore, on
                 if (!cameraMode) camView = false
             },
             onStudio = { toast("Modo Studio: em breve") },
-            onFit = { st.view = ViewTransform.fitSheet(sw, sh, canvasSize.width.toFloat(), canvasSize.height.toFloat(), 12f) },
-            onReference = { if (refImage == null) refLauncher.launch("image/*") else refVisible = !refVisible },
-            onReferenceLong = { refLauncher.launch("image/*") },
-            refActive = refImage != null && refVisible,
-            onColor = { dialog = EditorDialog.ColorPicker(it) },
-            onOnionOptions = { dialog = EditorDialog.Onion },
             onLayerOptions = { dialog = EditorDialog.LayerOptions(it.id) },
             onMoveLayer = { id, delta -> st.edit { p -> p.moveLayer(id, delta) } },
             onFrameOptions = { dialog = EditorDialog.FrameActions(it) },
             onGripEnd = onTimelineGrip,
-            onSwatchDrag = { dragPos = it },
-            onSwatchDrop = { p ->
-                dragPos = null
-                // Largar a cor sobre a folha pinta a região em que se largou (como no Procreate Dreams).
-                val local = Offset(p.x - canvasRoot.x, p.y - canvasRoot.y)
-                if (!cameraMode && local.x in 0f..canvasSize.width.toFloat() && local.y in 0f..canvasSize.height.toFloat()) {
-                    requestFill(st.view.screenToProject(Point(local.x, local.y)))
-                }
-            },
-            onSwatchCancel = { dragPos = null },
             modifier = Modifier.onSizeChanged { topBarHeightPx = it.height },
             cameraActive = cameraMode,
             cameraKeys = camera.keys.keys,
         )
     }
 
+    // Painel de ferramentas: pincel, borracha, laço, frames, desfazer, reproduzir e também cor, onion, ajustar e referência.
     val toolPanel: @Composable () -> Unit = {
         ToolPanel(
             st = st,
@@ -545,6 +531,22 @@ fun AnimationEditor(meta: ProjectMeta, initial: Project, store: ProjectStore, on
             },
             onAddFrame = { st.edit { p -> p.insertFrameAt(p.currentFrame + 1) } },
             onPlayLong = { dialog = EditorDialog.FpsEdit },
+            onColor = { dialog = EditorDialog.ColorPicker(it) },
+            onOnionOptions = { dialog = EditorDialog.Onion },
+            onFit = { st.view = ViewTransform.fitSheet(sw, sh, canvasSize.width.toFloat(), canvasSize.height.toFloat(), 12f) },
+            onReference = { if (refImage == null) refLauncher.launch("image/*") else refVisible = !refVisible },
+            onReferenceLong = { refLauncher.launch("image/*") },
+            refActive = refImage != null && refVisible,
+            onSwatchDrag = { dragPos = it },
+            onSwatchDrop = { p ->
+                dragPos = null
+                // Largar a cor sobre a folha pinta a região em que se largou (como no Procreate Dreams).
+                val local = Offset(p.x - canvasRoot.x, p.y - canvasRoot.y)
+                if (!cameraMode && local.x in 0f..canvasSize.width.toFloat() && local.y in 0f..canvasSize.height.toFloat()) {
+                    requestFill(st.view.screenToProject(Point(local.x, local.y)))
+                }
+            },
+            onSwatchCancel = { dragPos = null },
             onGripEnd = onToolsGrip,
         )
     }
@@ -583,11 +585,13 @@ fun AnimationEditor(meta: ProjectMeta, initial: Project, store: ProjectStore, on
             if (!st.timelineBottom) timelineBar()
             Row(Modifier.weight(1f).fillMaxWidth()) {
                 if (!st.toolsRight) sideColumn()
+                // Espaço de trabalho onde a folha flutua: ocupa todo o espaço que as barras deixam livre, com uma
+                // folga mínima (StudioMetrics.Gap) só do lado das barras.
                 Box(
                     Modifier.weight(1f).fillMaxHeight()
                         .padding(
-                            start = if (st.toolsRight) 6.dp else 0.dp, end = if (st.toolsRight) 0.dp else 6.dp,
-                            top = if (st.timelineBottom) 6.dp else 0.dp, bottom = if (st.timelineBottom) 0.dp else 6.dp,
+                            start = if (st.toolsRight) StudioMetrics.Gap else 0.dp, end = if (st.toolsRight) 0.dp else StudioMetrics.Gap,
+                            top = if (st.timelineBottom) StudioMetrics.Gap else 0.dp, bottom = if (st.timelineBottom) 0.dp else StudioMetrics.Gap,
                         )
                         .clip(RoundedCornerShape(14.dp)).background(StudioColors.Workspace)
                         .onSizeChanged { canvasSize = it }
@@ -933,7 +937,7 @@ fun AnimationEditor(meta: ProjectMeta, initial: Project, store: ProjectStore, on
                             }
                         }
                     )
-                    // Câmara: painel por cima da folha. (Ajustar à folha e referência estão agora na barra de cima.)
+                    // Câmara: painel por cima da folha. (Ajustar à folha e referência estão no painel de ferramentas.)
                     if (cameraMode) {
                         val curKey = camera.keys[st.project.currentFrameId]
                         CameraPanel(
