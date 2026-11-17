@@ -31,6 +31,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Brush
 import androidx.compose.material.icons.filled.FitScreen
 import androidx.compose.material.icons.filled.Image
+import androidx.compose.material.icons.filled.Layers
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Redo
@@ -65,6 +66,24 @@ import com.animationstudio.domain.extendHold
 import com.animationstudio.domain.holdEnd
 import com.animationstudio.domain.shrinkHold
 
+/**
+ * Medidas únicas da interface: todos os botões de ferramenta têm o mesmo tamanho e o mesmo espaçamento, nas barras
+ * e nos painéis. Para mudar o tamanho dos botões de toda a app basta mudar [Cell].
+ */
+internal object StudioMetrics {
+    /** Lado de cada botão quadrado (barras e painéis). */
+    val Cell = 32.dp
+
+    /** Espaço entre botões. */
+    val Gap = 3.dp
+
+    /** Margem interior das barras e dos cartões. */
+    val Pad = 3.dp
+
+    /** Altura dos botões com texto do painel da seleção (todos iguais). */
+    val TextButtonHeight = 40.dp
+}
+
 /** Cartão do estúdio: superfície azul escura com contorno fino e cantos arredondados. */
 internal fun Modifier.studioCard(radius: Dp = 14.dp): Modifier {
     val shape = RoundedCornerShape(radius)
@@ -83,8 +102,8 @@ private fun EditorState.holdSteps(steps: Int) {
 @Composable
 internal fun ToolCell(
     modifier: Modifier = Modifier,
-    width: Dp = 32.dp,
-    height: Dp = 32.dp,
+    width: Dp = StudioMetrics.Cell,
+    height: Dp = StudioMetrics.Cell,
     selected: Boolean = false,
     enabled: Boolean = true,
     onLongClick: (() -> Unit)? = null,
@@ -126,7 +145,8 @@ private fun GripHandle(modifier: Modifier = Modifier, onEnd: (Float, Float) -> U
 }
 
 // ---------------------------------------------------------------------------------------------
-// Barra da timeline: menu e "+" | camadas, cenários e frames | câmara, Studio, ajustar; cor e onion; referência
+// Barra da timeline, fina: [menu e "+" um abaixo do outro] | camadas e frames | [câmara e Studio um abaixo do outro].
+// Todos os botões têm o tamanho [StudioMetrics.Cell]. Cor, onion, ajustar e referência estão no painel de ferramentas.
 // ---------------------------------------------------------------------------------------------
 
 @Composable
@@ -139,19 +159,10 @@ internal fun TopBar(
     onAdd: () -> Unit,
     onCamera: () -> Unit,
     onStudio: () -> Unit,
-    onFit: () -> Unit,
-    onReference: () -> Unit,
-    onReferenceLong: () -> Unit,
-    refActive: Boolean,
-    onColor: (ColorMethod) -> Unit,
-    onOnionOptions: () -> Unit,
     onLayerOptions: (Layer) -> Unit,
     onMoveLayer: (Long, Int) -> Unit,
     onFrameOptions: (Int) -> Unit,
     onGripEnd: (Float, Float) -> Unit,
-    onSwatchDrag: (Offset) -> Unit,
-    onSwatchDrop: (Offset) -> Unit,
-    onSwatchCancel: () -> Unit,
     modifier: Modifier = Modifier,
     /** Modo câmara ligado (realça o botão da câmara). */
     cameraActive: Boolean = false,
@@ -165,29 +176,23 @@ internal fun TopBar(
     val rowH = cellH + 3.dp
     val rowPx = with(LocalDensity.current) { rowH.toPx() }
     val curMove by rememberUpdatedState(onMoveLayer)
-    val curSwDrag by rememberUpdatedState(onSwatchDrag)
-    val curSwDrop by rememberUpdatedState(onSwatchDrop)
-    val curSwCancel by rememberUpdatedState(onSwatchCancel)
-    var swatchRoot by remember { mutableStateOf(Offset.Zero) }
+    // Altura de uma pilha de dois botões: a lista de camadas nunca fica mais baixa que ela.
+    val stackH = StudioMetrics.Cell * 2 + StudioMetrics.Gap
     val hScroll = rememberScrollState()
     val vScroll = rememberScrollState()
     Row(
-        modifier.fillMaxWidth().background(StudioColors.Navy).padding(4.dp),
-        horizontalArrangement = Arrangement.spacedBy(4.dp),
+        modifier.fillMaxWidth().background(StudioColors.Navy).padding(StudioMetrics.Pad),
+        horizontalArrangement = Arrangement.spacedBy(StudioMetrics.Gap),
         verticalAlignment = Alignment.Top,
     ) {
-        Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                GripHandle(Modifier.size(width = 16.dp, height = 30.dp), onGripEnd)
-                ToolCell(width = 30.dp, height = 30.dp, onClick = onMenu) { PanelGlyph(it) }
-            }
-            Row {
-                Spacer(Modifier.width(16.dp))
-                ToolCell(width = 30.dp, height = 30.dp, onClick = onAdd) { Text("+", style = StudioType.Title.copy(color = it)) }
-            }
+        GripHandle(Modifier.size(width = 14.dp, height = stackH), onGripEnd)
+        Column(verticalArrangement = Arrangement.spacedBy(StudioMetrics.Gap)) {
+            ToolCell(onClick = onMenu) { PanelGlyph(it) }
+            ToolCell(onClick = onAdd) { Text("+", style = StudioType.Title.copy(color = it)) }
         }
         Row(
-            Modifier.weight(1f).studioCard(12.dp).heightIn(max = if (expanded) rowH * 5 + 6.dp else rowH * 2 + 6.dp)
+            Modifier.weight(1f).studioCard(12.dp)
+                .heightIn(max = if (expanded) rowH * 5 + 6.dp else maxOf(rowH * 2 + 6.dp, stackH))
                 .verticalScroll(vScroll).padding(3.dp)
         ) {
             Column(Modifier.width(104.dp)) {
@@ -287,50 +292,9 @@ internal fun TopBar(
                 }
             }
         }
-        Column(verticalArrangement = Arrangement.spacedBy(3.dp), horizontalAlignment = Alignment.End) {
-            // Câmara, Studio (curvas; em breve) e ajustar à folha.
-            Row(horizontalArrangement = Arrangement.spacedBy(3.dp), verticalAlignment = Alignment.CenterVertically) {
-                ToolCell(width = 30.dp, height = 30.dp, selected = cameraActive, onClick = onCamera) { Icon(Icons.Default.Videocam, "Câmara", tint = it, modifier = Modifier.size(17.dp)) }
-                ToolCell(width = 30.dp, height = 30.dp, onClick = onStudio) { Icon(Icons.Default.ShowChart, "Studio", tint = it, modifier = Modifier.size(17.dp)) }
-                ToolCell(width = 30.dp, height = 30.dp, onClick = onFit) { Icon(Icons.Default.FitScreen, "Ajustar à folha", tint = it, modifier = Modifier.size(17.dp)) }
-            }
-            // Cor (círculo): toque abre a roda de cores; arrastar para a folha pinta a região onde se solta. Onion ao lado.
-            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(3.dp)) {
-                CheckerBox(
-                    Color(st.colorArgb),
-                    Modifier.size(30.dp).clip(CircleShape)
-                        .border(2.dp, StudioColors.Ink, CircleShape)
-                        .onGloballyPositioned { swatchRoot = it.positionInRoot() }
-                        .pointerInput(Unit) {
-                            var cur = Offset.Zero
-                            detectDragGestures(
-                                onDragStart = { o -> cur = swatchRoot + o; curSwDrag(cur) },
-                                onDragEnd = { curSwDrop(cur) },
-                                onDragCancel = { curSwCancel() },
-                            ) { change, d ->
-                                change.consume()
-                                cur += d
-                                curSwDrag(cur)
-                            }
-                        }
-                        .clickable { onColor(ColorMethod.DISC) }
-                )
-                Box(Modifier.size(width = 20.dp, height = 28.dp).clickable(onClick = onOnionOptions), contentAlignment = Alignment.Center) {
-                    DotsGlyph(StudioColors.InkDim)
-                }
-                val shape = RoundedCornerShape(9.dp)
-                Box(
-                    Modifier.height(28.dp).clip(shape)
-                        .background(if (st.onionOn) StudioColors.Accent else StudioColors.Surface2)
-                        .border(1.dp, if (st.onionOn) StudioColors.Accent else StudioColors.Outline, shape)
-                        .clickable { st.onionOn = !st.onionOn }.padding(horizontal = 12.dp),
-                    contentAlignment = Alignment.Center,
-                ) { Text("Onion", style = StudioType.Label.copy(fontSize = 11.sp)) }
-            }
-            // Janela de referência: toque mostra ou esconde; toque longo troca a imagem.
-            ToolCell(width = 30.dp, height = 28.dp, selected = refActive, onLongClick = onReferenceLong, onClick = onReference) {
-                Icon(Icons.Default.Image, "Referência", tint = it, modifier = Modifier.size(17.dp))
-            }
+        Column(verticalArrangement = Arrangement.spacedBy(StudioMetrics.Gap)) {
+            ToolCell(selected = cameraActive, onClick = onCamera) { Icon(Icons.Default.Videocam, "Câmara", tint = it, modifier = Modifier.size(17.dp)) }
+            ToolCell(onClick = onStudio) { Icon(Icons.Default.ShowChart, "Studio", tint = it, modifier = Modifier.size(17.dp)) }
         }
     }
 }
@@ -358,9 +322,49 @@ internal fun ExpandTab(expanded: Boolean, atBottom: Boolean, onSet: (Boolean) ->
 }
 
 // ---------------------------------------------------------------------------------------------
-// Painel de ferramentas compacto (grelha de 2 colunas), como no esboço:
-//   pincel | borracha / laço | novo frame / desfazer | refazer / reproduzir / frame anterior | seguinte
+// Painel de ferramentas: grelha de 2 colunas, todos os botões do mesmo tamanho ([StudioMetrics.Cell]):
+//   pincel | borracha
+//   laço | novo frame
+//   desfazer | refazer
+//   frame anterior | seguinte
+//   reproduzir | cor
+//   onion | ajustar à folha
+//   referência
 // ---------------------------------------------------------------------------------------------
+
+/** Cor atual (círculo): toque abre a roda de cores; arrastar para a folha pinta a região onde se solta. */
+@Composable
+private fun SwatchCell(
+    st: EditorState,
+    onColor: (ColorMethod) -> Unit,
+    onDrag: (Offset) -> Unit,
+    onDrop: (Offset) -> Unit,
+    onCancel: () -> Unit,
+) {
+    val curDrag by rememberUpdatedState(onDrag)
+    val curDrop by rememberUpdatedState(onDrop)
+    val curCancel by rememberUpdatedState(onCancel)
+    var swatchRoot by remember { mutableStateOf(Offset.Zero) }
+    CheckerBox(
+        Color(st.colorArgb),
+        Modifier.size(StudioMetrics.Cell).clip(CircleShape)
+            .border(2.dp, StudioColors.Ink, CircleShape)
+            .onGloballyPositioned { swatchRoot = it.positionInRoot() }
+            .pointerInput(Unit) {
+                var cur = Offset.Zero
+                detectDragGestures(
+                    onDragStart = { o -> cur = swatchRoot + o; curDrag(cur) },
+                    onDragEnd = { curDrop(cur) },
+                    onDragCancel = { curCancel() },
+                ) { change, d ->
+                    change.consume()
+                    cur += d
+                    curDrag(cur)
+                }
+            }
+            .clickable { onColor(ColorMethod.DISC) }
+    )
+}
 
 @Composable
 internal fun ToolPanel(
@@ -370,6 +374,15 @@ internal fun ToolPanel(
     onToolSettings: (Tool) -> Unit,
     onAddFrame: () -> Unit,
     onPlayLong: () -> Unit,
+    onColor: (ColorMethod) -> Unit,
+    onOnionOptions: () -> Unit,
+    onFit: () -> Unit,
+    onReference: () -> Unit,
+    onReferenceLong: () -> Unit,
+    refActive: Boolean,
+    onSwatchDrag: (Offset) -> Unit,
+    onSwatchDrop: (Offset) -> Unit,
+    onSwatchCancel: () -> Unit,
     onGripEnd: (Float, Float) -> Unit,
 ) {
     Column(
@@ -379,10 +392,10 @@ internal fun ToolPanel(
     ) {
         GripHandle(Modifier.size(width = 40.dp, height = 16.dp), onGripEnd)
         Column(
-            Modifier.studioCard(12.dp).padding(3.dp),
-            verticalArrangement = Arrangement.spacedBy(3.dp),
+            Modifier.studioCard(12.dp).padding(StudioMetrics.Pad),
+            verticalArrangement = Arrangement.spacedBy(StudioMetrics.Gap),
         ) {
-            Row(horizontalArrangement = Arrangement.spacedBy(3.dp)) {
+            Row(horizontalArrangement = Arrangement.spacedBy(StudioMetrics.Gap)) {
                 ToolCell(
                     selected = st.tool == Tool.BRUSH, onLongClick = { onToolLibrary(Tool.BRUSH) },
                     onDoubleClick = { onToolSettings(Tool.BRUSH) }, onClick = { onToolTap(Tool.BRUSH) },
@@ -392,21 +405,37 @@ internal fun ToolPanel(
                     onDoubleClick = { onToolSettings(Tool.ERASER) }, onClick = { onToolTap(Tool.ERASER) },
                 ) { EraserGlyph(it, Modifier.size(17.dp)) }
             }
-            Row(horizontalArrangement = Arrangement.spacedBy(3.dp)) {
+            Row(horizontalArrangement = Arrangement.spacedBy(StudioMetrics.Gap)) {
                 ToolCell(selected = st.tool == Tool.LASSO, onClick = { onToolTap(Tool.LASSO) }) { LassoGlyph(it, Modifier.size(17.dp)) }
                 ToolCell(onClick = onAddFrame) { Text("+", style = StudioType.Title.copy(fontSize = 18.sp, color = it)) }
             }
-            Row(horizontalArrangement = Arrangement.spacedBy(3.dp)) {
+            Row(horizontalArrangement = Arrangement.spacedBy(StudioMetrics.Gap)) {
                 ToolCell(enabled = st.history.canUndo && !st.playing, onClick = { st.undo() }) { Icon(Icons.Default.Undo, "Desfazer", tint = it, modifier = Modifier.size(17.dp)) }
                 ToolCell(enabled = st.history.canRedo && !st.playing, onClick = { st.redo() }) { Icon(Icons.Default.Redo, "Refazer", tint = it, modifier = Modifier.size(17.dp)) }
             }
-            // Reproduzir (toque longo: FPS e modo de reprodução).
-            ToolCell(width = 67.dp, height = 40.dp, selected = st.playing, onLongClick = onPlayLong, onClick = { st.togglePlay() }) {
-                Icon(if (st.playing) Icons.Default.Pause else Icons.Default.PlayArrow, if (st.playing) "Parar" else "Reproduzir", tint = it, modifier = Modifier.size(20.dp))
-            }
-            Row(horizontalArrangement = Arrangement.spacedBy(3.dp)) {
+            Row(horizontalArrangement = Arrangement.spacedBy(StudioMetrics.Gap)) {
                 ToolCell(enabled = st.project.currentFrame > 0 && !st.playing, onClick = { st.go(-1) }) { TriangleGlyph(it, true, Modifier.size(14.dp)) }
                 ToolCell(enabled = st.project.currentFrame < st.project.frameCount - 1 && !st.playing, onClick = { st.go(1) }) { TriangleGlyph(it, false, Modifier.size(14.dp)) }
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(StudioMetrics.Gap), verticalAlignment = Alignment.CenterVertically) {
+                // Reproduzir (toque longo: FPS e modo de reprodução).
+                ToolCell(selected = st.playing, onLongClick = onPlayLong, onClick = { st.togglePlay() }) {
+                    Icon(if (st.playing) Icons.Default.Pause else Icons.Default.PlayArrow, if (st.playing) "Parar" else "Reproduzir", tint = it, modifier = Modifier.size(19.dp))
+                }
+                SwatchCell(st, onColor, onSwatchDrag, onSwatchDrop, onSwatchCancel)
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(StudioMetrics.Gap)) {
+                // Onion: toque liga ou desliga; toque longo abre as opções.
+                ToolCell(selected = st.onionOn, onLongClick = onOnionOptions, onClick = { st.onionOn = !st.onionOn }) {
+                    Icon(Icons.Default.Layers, "Onion", tint = it, modifier = Modifier.size(17.dp))
+                }
+                ToolCell(onClick = onFit) { Icon(Icons.Default.FitScreen, "Ajustar à folha", tint = it, modifier = Modifier.size(17.dp)) }
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(StudioMetrics.Gap)) {
+                // Janela de referência: toque mostra ou esconde; toque longo troca a imagem.
+                ToolCell(selected = refActive, onLongClick = onReferenceLong, onClick = onReference) {
+                    Icon(Icons.Default.Image, "Referência", tint = it, modifier = Modifier.size(17.dp))
+                }
             }
         }
     }
