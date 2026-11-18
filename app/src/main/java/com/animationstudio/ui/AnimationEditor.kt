@@ -64,6 +64,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
@@ -461,7 +462,7 @@ fun AnimationEditor(meta: ProjectMeta, initial: Project, store: ProjectStore, on
 
     LaunchedEffect(canvasSize) {
         if (canvasSize.width > 0 && !st.fitted) {
-            st.view = ViewTransform.fitSheet(sw, sh, canvasSize.width.toFloat(), canvasSize.height.toFloat(), 12f)
+            st.view = ViewTransform.fitSheet(sw, sh, canvasSize.width.toFloat(), canvasSize.height.toFloat(), 4f)
             st.fitted = true
         }
     }
@@ -499,7 +500,7 @@ fun AnimationEditor(meta: ProjectMeta, initial: Project, store: ProjectStore, on
                 if (!cameraMode) camView = false
             },
             onStudio = { toast("Modo Studio: em breve") },
-            onFit = { st.view = ViewTransform.fitSheet(sw, sh, canvasSize.width.toFloat(), canvasSize.height.toFloat(), 12f) },
+            onFit = { st.view = ViewTransform.fitSheet(sw, sh, canvasSize.width.toFloat(), canvasSize.height.toFloat(), 4f) },
             onReference = { if (refImage == null) refLauncher.launch("image/*") else refVisible = !refVisible },
             onReferenceLong = { refLauncher.launch("image/*") },
             refActive = refImage != null && refVisible,
@@ -584,12 +585,8 @@ fun AnimationEditor(meta: ProjectMeta, initial: Project, store: ProjectStore, on
             Row(Modifier.weight(1f).fillMaxWidth()) {
                 if (!st.toolsRight) sideColumn()
                 Box(
-                    Modifier.weight(1f).fillMaxHeight()
-                        .padding(
-                            start = if (st.toolsRight) 6.dp else 0.dp, end = if (st.toolsRight) 0.dp else 6.dp,
-                            top = if (st.timelineBottom) 6.dp else 0.dp, bottom = if (st.timelineBottom) 0.dp else 6.dp,
-                        )
-                        .clip(RoundedCornerShape(14.dp)).background(StudioColors.Workspace)
+                    // Espaço de trabalho sem moldura nem margem: vai de borda a borda entre as barras e a folha move-se livremente.
+                    Modifier.weight(1f).fillMaxHeight().clipToBounds().background(StudioColors.Workspace)
                         .onSizeChanged { canvasSize = it }
                         .onGloballyPositioned { canvasRoot = it.positionInRoot() }
                 ) {
@@ -1113,7 +1110,7 @@ fun AnimationEditor(meta: ProjectMeta, initial: Project, store: ProjectStore, on
             onApply = { w, h ->
                 sheetW = w
                 sheetH = h
-                st.view = ViewTransform.fitSheet(w.toFloat(), h.toFloat(), canvasSize.width.toFloat(), canvasSize.height.toFloat(), 12f)
+                st.view = ViewTransform.fitSheet(w.toFloat(), h.toFloat(), canvasSize.width.toFloat(), canvasSize.height.toFloat(), 4f)
                 dialog = null
             },
             onDismiss = { dialog = null },
