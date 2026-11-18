@@ -98,8 +98,10 @@ private class InkRender(
     val bristleVariant: Int = 0,
     /** Carimbos da natureza com várias cores (árvore, galho, relva). */
     val tinted: List<TintBucket>? = null,
-    /** Textura de um pincel importado de PNG (máscara branca com transparência): o traço é uma linha uniforme. */
-    val tex: ImageBitmap? = null,
+    /** Pincel importado de PNG: faixa que segue o traço com a imagem esticada uma só vez (sem repetição). */
+    val strip: TexStrip? = null,
+    /** Toques calculados pelo libmypaint (11 valores por toque). */
+    val myDabs: FloatArray? = null,
 )
 
 private val dabCache = ConcurrentHashMap<Int, ImageBitmap>()
@@ -686,7 +688,18 @@ private fun buildInk(s: BrushStroke): InkRender {
     if (custom != null) {
         val texture = CustomBrushes.tip(custom.id)
         if (texture != null) {
-            return InkRender(listOf(buildPass(s, s.width, 1f)), null, null, 0f, 0f, null, 0f, GrainKind.PAPER, tex = texture)
+            return InkRender(
+                listOf(buildPass(s, s.width, 1f)), null, null, 0f, 0f, null, 0f, GrainKind.PAPER,
+                strip = buildTexStrip(s.points, s.width, texture),
+            )
+        }
+    }
+    // Pincel do libmypaint: os toques vêm do motor nativo.
+    val mp = MyPaintBrushes.find(s.brush)
+    if (mp != null) {
+        val dabs = MyPaintBrushes.dabs(mp, s)
+        if (dabs != null) {
+            return InkRender(emptyList(), null, null, 0f, 0f, null, 0f, GrainKind.PAPER, myDabs = dabs)
         }
     }
     val preset = if (s.brush.isNotEmpty()) BrushLibrary.byIdOrNull(s.brush) else null
@@ -1042,6 +1055,9 @@ private fun shaded(c: Color, f: Float): Color = if (f < 0f) lerp(c, Color.Black,
 
 /** [mono] = tudo na mesma cor (onion skin, borracha): os carimbos da natureza perdem as cores próprias. */
 private fun DrawScope.drawRender(r: InkRender, rgb: Color, blend: BlendMode, mono: Boolean) {
+    r.myDabs?.let { drawMyPaintDabs(it, rgb, mono, blend); return }
+    val strip = r.strip
+    if (strip != null && !mono && drawTexStrip(strip, rgb)) return
     val dabs = r.dabs
     val lines = r.lines
     val buckets = r.stampBuckets
@@ -1069,21 +1085,6 @@ private fun DrawScope.drawGrain(strength: Float, kind: GrainKind, r: Rect) {
 }
 
 /**
- * Textura de um pincel importado de PNG: a imagem é ajustada à largura do traço e só fica tinta onde o PNG tem
- * opacidade. A linha continua uniforme; não se carimba a ponta.
- */
-private fun DrawScope.drawPngTexture(tex: ImageBitmap, width: Float, r: Rect) {
-    val k = max(1f, width) / max(tex.width, tex.height).toFloat()
-    val shader = ImageShader(tex, TileMode.Repeated, TileMode.Repeated)
-    withTransform({ scale(k, k, Offset.Zero) }) {
-        drawRect(
-            ShaderBrush(shader), Offset(r.left / k, r.top / k), Size(r.width / k, r.height / k),
-            blendMode = BlendMode.DstIn,
-        )
-    }
-}
-
-/**
  * Desenha um traço. A opacidade vem do alfa da cor (a da borracha também: a borracha pode apagar só em parte);
  * a borracha usa DstOut (apaga a opacidade, não pinta de branco).
  * Com opacidade < 100%, modo "dentro"/"por trás", toques suaves, cerdas, lápis, textura de PNG ou textura, as
@@ -1104,7 +1105,7 @@ internal fun DrawScope.drawInk(s: BrushStroke, tint: Color?, useCache: Boolean) 
         s.mode == 2 -> BlendMode.DstOver
         else -> BlendMode.SrcOver
     }
-    val needLayer = alpha < 0.999f || (!s.erase && s.mode != 0) || render.dabs != null || render.grain > 0f || render.tex != null
+    val needLayer = alpha < 0.999f || (!s.erase && s.mode != 0) || render.dabs != null || render.grain > 0f || render.myDabs != null
     if (!needLayer) {
         // Borracha total: duas passagens DstOut tiram o fio de anti-aliasing que sobrava nas bordas ((1-c)² em vez de (1-c)).
         val passes = if (s.erase) 2 else 1
@@ -1120,8 +1121,6 @@ internal fun DrawScope.drawInk(s: BrushStroke, tint: Color?, useCache: Boolean) 
     drawContext.canvas.saveLayer(rect, paint)
     drawRender(render, rgb, BlendMode.SrcOver, mono)
     if (render.grain > 0f) drawGrain(render.grain, render.grainKind, rect)
-    val tex = render.tex
-    if (tex != null) drawPngTexture(tex, s.width, rect)
     drawContext.canvas.restore()
 }
 
@@ -1316,7 +1315,7 @@ internal fun DrawScope.drawElements(
     }
     drawContext.canvas.restore()
     drawContext.canvas.saveLayer(all, Paint())
-    for (i in strokes.indices) if (strokes[i].fill == null) one(i)
+    for (i in strokes.indices) if (strokes[i].fill == null || strokes[i].erase) one(i)
     drawContext.canvas.restore()
 }
 
