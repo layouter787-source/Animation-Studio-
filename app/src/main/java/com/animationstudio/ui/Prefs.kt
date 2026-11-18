@@ -16,6 +16,7 @@ internal class Prefs(context: Context) {
         StudioRender.warmUp()
         // Pincéis que o utilizador importou de imagens (uma vez por arranque).
         CustomBrushes.load(context)
+        MyPaintBrushes.load(context)
     }
 
     var penOnly: Boolean

@@ -7,13 +7,11 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.GridOn
 import androidx.compose.material.icons.filled.Transform
@@ -42,15 +40,15 @@ private fun PanelButton(
     val shape = RoundedCornerShape(9.dp)
     val tint = if (!enabled) StudioColors.InkDim.copy(alpha = 0.5f) else if (selected) Color.White else StudioColors.Ink
     Column(
-        modifier.clip(shape)
+        modifier.height(48.dp).clip(shape)
             .background(if (selected) StudioColors.Accent else StudioColors.Surface2)
             .border(1.dp, if (selected) StudioColors.Accent else StudioColors.Outline, shape)
             .clickable(enabled = enabled, onClick = onClick)
-            .padding(vertical = 7.dp, horizontal = 3.dp),
+            .padding(horizontal = 3.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(2.dp),
+        verticalArrangement = Arrangement.Center,
     ) {
-        if (icon != null) Icon(icon, label, tint = tint, modifier = Modifier.size(22.dp))
+        if (icon != null) Icon(icon, label, tint = tint, modifier = Modifier.size(StudioDims.Icon))
         Text(label, style = StudioType.Label.copy(fontSize = 9.sp, color = tint), textAlign = TextAlign.Center, maxLines = 2)
     }
 }
@@ -78,31 +76,31 @@ internal fun SelectionPanel(
     onMesh: () -> Unit,
 ) {
     Column(
-        Modifier.width(150.dp).fillMaxHeight().verticalScroll(rememberScrollState()).padding(horizontal = 3.dp).padding(bottom = 4.dp),
+        Modifier.width(StudioDims.PanelWidth + 56.dp).padding(horizontal = 2.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
         Column(
-            Modifier.studioCard(12.dp).padding(6.dp),
+            Modifier.studioCard(12.dp).padding(StudioDims.Pad),
             horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(4.dp),
+            verticalArrangement = Arrangement.spacedBy(StudioDims.Gap),
         ) {
             Box(
-                Modifier.size(38.dp).clip(RoundedCornerShape(10.dp)).background(StudioColors.Accent).clickable(onClick = onClose),
+                Modifier.size(StudioDims.Cell).clip(RoundedCornerShape(9.dp)).background(StudioColors.Accent).clickable(onClick = onClose),
                 contentAlignment = Alignment.Center,
             ) { LassoGlyph(Color.White, Modifier.size(22.dp)) }
-            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+            Row(horizontalArrangement = Arrangement.spacedBy(StudioDims.Gap)) {
                 PanelButton("Selec. todos", Modifier.weight(1f), enabled = !busy, onClick = onSelectAll)
                 PanelButton("Selec. nada", Modifier.weight(1f), enabled = hasSelection, onClick = onSelectNone)
             }
-            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+            Row(horizontalArrangement = Arrangement.spacedBy(StudioDims.Gap)) {
                 PanelButton("Copiar", Modifier.weight(1f), enabled = hasSelection, onClick = onCopy)
                 PanelButton("Colar", Modifier.weight(1f), enabled = canPaste, onClick = onPaste)
             }
-            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+            Row(horizontalArrangement = Arrangement.spacedBy(StudioDims.Gap)) {
                 PanelButton("Flip horizontal", Modifier.weight(1f), enabled = hasSelection, onClick = onFlipH)
                 PanelButton("Flip vertical", Modifier.weight(1f), enabled = hasSelection, onClick = onFlipV)
             }
-            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+            Row(horizontalArrangement = Arrangement.spacedBy(StudioDims.Gap)) {
                 PanelButton("Perspetiva", Modifier.weight(1f), enabled = hasSelection, selected = perspectiveOn, icon = Icons.Default.Transform, onClick = onPerspective)
                 PanelButton("Malha", Modifier.weight(1f), enabled = hasSelection, icon = Icons.Default.GridOn, onClick = onMesh)
             }

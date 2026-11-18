@@ -83,8 +83,8 @@ private fun EditorState.holdSteps(steps: Int) {
 @Composable
 internal fun ToolCell(
     modifier: Modifier = Modifier,
-    width: Dp = 32.dp,
-    height: Dp = 32.dp,
+    width: Dp = StudioDims.Cell,
+    height: Dp = StudioDims.Cell,
     selected: Boolean = false,
     enabled: Boolean = true,
     onLongClick: (() -> Unit)? = null,
@@ -373,40 +373,40 @@ internal fun ToolPanel(
     onGripEnd: (Float, Float) -> Unit,
 ) {
     Column(
-        Modifier.width(80.dp).fillMaxHeight().verticalScroll(rememberScrollState()).padding(horizontal = 3.dp).padding(bottom = 4.dp),
-        verticalArrangement = Arrangement.spacedBy(2.dp),
+        Modifier.width(StudioDims.PanelWidth).padding(horizontal = 2.dp),
+        verticalArrangement = Arrangement.spacedBy(StudioDims.Gap),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
         GripHandle(Modifier.size(width = 40.dp, height = 16.dp), onGripEnd)
         Column(
-            Modifier.studioCard(12.dp).padding(3.dp),
-            verticalArrangement = Arrangement.spacedBy(3.dp),
+            Modifier.studioCard(12.dp).padding(StudioDims.Pad),
+            verticalArrangement = Arrangement.spacedBy(StudioDims.Gap),
         ) {
-            Row(horizontalArrangement = Arrangement.spacedBy(3.dp)) {
+            Row(horizontalArrangement = Arrangement.spacedBy(StudioDims.Gap)) {
                 ToolCell(
                     selected = st.tool == Tool.BRUSH, onLongClick = { onToolLibrary(Tool.BRUSH) },
                     onDoubleClick = { onToolSettings(Tool.BRUSH) }, onClick = { onToolTap(Tool.BRUSH) },
-                ) { Icon(Icons.Default.Brush, "Pincel", tint = it, modifier = Modifier.size(17.dp)) }
+                ) { Icon(Icons.Default.Brush, "Pincel", tint = it, modifier = Modifier.size(StudioDims.Icon)) }
                 ToolCell(
                     selected = st.tool == Tool.ERASER, onLongClick = { onToolLibrary(Tool.ERASER) },
                     onDoubleClick = { onToolSettings(Tool.ERASER) }, onClick = { onToolTap(Tool.ERASER) },
-                ) { EraserGlyph(it, Modifier.size(17.dp)) }
+                ) { EraserGlyph(it, Modifier.size(StudioDims.Icon)) }
             }
-            Row(horizontalArrangement = Arrangement.spacedBy(3.dp)) {
-                ToolCell(selected = st.tool == Tool.LASSO, onClick = { onToolTap(Tool.LASSO) }) { LassoGlyph(it, Modifier.size(17.dp)) }
+            Row(horizontalArrangement = Arrangement.spacedBy(StudioDims.Gap)) {
+                ToolCell(selected = st.tool == Tool.LASSO, onClick = { onToolTap(Tool.LASSO) }) { LassoGlyph(it, Modifier.size(StudioDims.Icon)) }
                 ToolCell(onClick = onAddFrame) { Text("+", style = StudioType.Title.copy(fontSize = 18.sp, color = it)) }
             }
-            Row(horizontalArrangement = Arrangement.spacedBy(3.dp)) {
-                ToolCell(enabled = st.history.canUndo && !st.playing, onClick = { st.undo() }) { Icon(Icons.Default.Undo, "Desfazer", tint = it, modifier = Modifier.size(17.dp)) }
-                ToolCell(enabled = st.history.canRedo && !st.playing, onClick = { st.redo() }) { Icon(Icons.Default.Redo, "Refazer", tint = it, modifier = Modifier.size(17.dp)) }
+            Row(horizontalArrangement = Arrangement.spacedBy(StudioDims.Gap)) {
+                ToolCell(enabled = st.history.canUndo && !st.playing, onClick = { st.undo() }) { Icon(Icons.Default.Undo, "Desfazer", tint = it, modifier = Modifier.size(StudioDims.Icon)) }
+                ToolCell(enabled = st.history.canRedo && !st.playing, onClick = { st.redo() }) { Icon(Icons.Default.Redo, "Refazer", tint = it, modifier = Modifier.size(StudioDims.Icon)) }
             }
             // Reproduzir (toque longo: FPS e modo de reprodução).
-            ToolCell(width = 67.dp, height = 40.dp, selected = st.playing, onLongClick = onPlayLong, onClick = { st.togglePlay() }) {
-                Icon(if (st.playing) Icons.Default.Pause else Icons.Default.PlayArrow, if (st.playing) "Parar" else "Reproduzir", tint = it, modifier = Modifier.size(20.dp))
+            ToolCell(width = StudioDims.Cell * 2 + StudioDims.Gap, selected = st.playing, onLongClick = onPlayLong, onClick = { st.togglePlay() }) {
+                Icon(if (st.playing) Icons.Default.Pause else Icons.Default.PlayArrow, if (st.playing) "Parar" else "Reproduzir", tint = it, modifier = Modifier.size(StudioDims.Icon))
             }
-            Row(horizontalArrangement = Arrangement.spacedBy(3.dp)) {
-                ToolCell(enabled = st.project.currentFrame > 0 && !st.playing, onClick = { st.go(-1) }) { TriangleGlyph(it, true, Modifier.size(14.dp)) }
-                ToolCell(enabled = st.project.currentFrame < st.project.frameCount - 1 && !st.playing, onClick = { st.go(1) }) { TriangleGlyph(it, false, Modifier.size(14.dp)) }
+            Row(horizontalArrangement = Arrangement.spacedBy(StudioDims.Gap)) {
+                ToolCell(enabled = st.project.currentFrame > 0 && !st.playing, onClick = { st.go(-1) }) { TriangleGlyph(it, true, Modifier.size(StudioDims.Icon)) }
+                ToolCell(enabled = st.project.currentFrame < st.project.frameCount - 1 && !st.playing, onClick = { st.go(1) }) { TriangleGlyph(it, false, Modifier.size(StudioDims.Icon)) }
             }
         }
     }

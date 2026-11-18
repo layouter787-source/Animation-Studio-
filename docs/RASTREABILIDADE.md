@@ -70,3 +70,7 @@ Estados: `PENDENTE`, `EM IMPLEMENTAÇÃO`, `IMPLEMENTADO`, `TESTADO`, `BLOQUEADO
 ## Níveis de evidência
 
 1. Código escrito → 2. Compila no CI → 3. Testes unitários verdes no CI → 4. Validado em emulador/dispositivo. Os itens de domínio estão no nível 3; a UI está no nível 2.
+
+## libmypaint e pincéis (ver docs/LIBMYPAINT.md)
+- libmypaint (ISC): https://github.com/mypaint/libmypaint, commit `d5a88fb`, obtido no build.
+- mypaint-brushes (CC0): definições de pincel em `assets/mypaint_brushes.txt`.

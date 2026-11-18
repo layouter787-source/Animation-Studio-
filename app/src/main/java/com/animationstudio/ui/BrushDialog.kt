@@ -25,6 +25,7 @@ import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.Button
 import androidx.compose.material3.Icon
@@ -206,12 +207,12 @@ internal fun BrushLibraryDialog(
                         for (t in tabs) {
                             val sel = t == tab
                             val label = when (t) {
-                                BrushTab.LIST -> if (kind == BrushKind.BRUSH) "Pincéis" else "Borrachas"
+                                BrushTab.LIST -> if (kind == BrushKind.BRUSH) "Todos" else "Borrachas"
                                 BrushTab.RECENT -> "Recentes"
                                 BrushTab.CUSTOM -> "Personalizados"
                             }
                             Box(
-                                Modifier.weight(1f).height(34.dp).clip(RoundedCornerShape(10.dp))
+                                Modifier.weight(1f).height(StudioDims.Cell).clip(RoundedCornerShape(10.dp))
                                     .background(if (sel) StudioColors.Accent else StudioColors.Surface2)
                                     .border(1.dp, if (sel) StudioColors.Accent else StudioColors.Outline, RoundedCornerShape(10.dp))
                                     .clickable { tab = t; showCats = false },
@@ -220,8 +221,14 @@ internal fun BrushLibraryDialog(
                         }
                     }
                     Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+                        // Confirmar: fecha a biblioteca (como o visto do esboço).
+                        Box(
+                            Modifier.size(StudioDims.Cell).clip(RoundedCornerShape(10.dp)).background(StudioColors.Accent)
+                                .clickable { onDismiss() },
+                            contentAlignment = Alignment.Center,
+                        ) { Icon(Icons.Default.Check, "Fechar", tint = Color.White, modifier = Modifier.size(StudioDims.Icon)) }
                         Row(
-                            Modifier.weight(1f).height(34.dp).clip(RoundedCornerShape(10.dp)).background(StudioColors.Surface2)
+                            Modifier.weight(1f).height(StudioDims.Cell).clip(RoundedCornerShape(10.dp)).background(StudioColors.Surface2)
                                 .border(1.dp, StudioColors.Outline, RoundedCornerShape(10.dp)).padding(horizontal = 8.dp),
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.spacedBy(6.dp),
@@ -241,7 +248,7 @@ internal fun BrushLibraryDialog(
                         }
                         if (tab == BrushTab.LIST) {
                             Box(
-                                Modifier.height(34.dp).clip(RoundedCornerShape(10.dp))
+                                Modifier.height(StudioDims.Cell).clip(RoundedCornerShape(10.dp))
                                     .background(if (showCats) StudioColors.Accent else StudioColors.Surface2)
                                     .border(1.dp, if (showCats) StudioColors.Accent else StudioColors.Outline, RoundedCornerShape(10.dp))
                                     .clickable { showCats = !showCats }.padding(horizontal = 12.dp),
@@ -251,11 +258,11 @@ internal fun BrushLibraryDialog(
                         if (kind == BrushKind.BRUSH) {
                             // Importar uma imagem do telemóvel como pincel (PNG com transparência).
                             Box(
-                                Modifier.size(34.dp).clip(RoundedCornerShape(10.dp)).background(StudioColors.Surface2)
+                                Modifier.size(StudioDims.Cell).clip(RoundedCornerShape(10.dp)).background(StudioColors.Surface2)
                                     .border(1.dp, StudioColors.Outline, RoundedCornerShape(10.dp))
                                     .clickable { picker.launch("image/*") },
                                 contentAlignment = Alignment.Center,
-                            ) { Icon(Icons.Default.Add, "Importar pincel de imagem", tint = StudioColors.Ink, modifier = Modifier.size(18.dp)) }
+                            ) { Icon(Icons.Default.Add, "Importar pincel de imagem", tint = StudioColors.Ink, modifier = Modifier.size(StudioDims.Icon)) }
                         }
                     }
                     Text(
