@@ -105,6 +105,7 @@ object BrushLibrary {
 
     /** Categoria dos pincéis que o utilizador importa de imagens (PNG ou com transparência). */
     const val CUSTOM = "Meus pincéis"
+    const val MYPAINT = "libmypaint"
 
     private val allCategories = listOf(
         SKETCH, INK, LINEART, COMICS, MARKER, AIR, WATER, PAINT, BLOTS, TEXTURES, SHADOW, HAIR, LIGHT, COLORFX,
@@ -282,11 +283,21 @@ object BrushLibrary {
         customList = list
     }
 
-    fun byIdOrNull(id: String): BrushPreset? = all.firstOrNull { it.id == id } ?: customList.firstOrNull { it.id == id }
+    @Volatile
+    private var extraList: List<BrushPreset> = emptyList()
+
+    /** Define os pincéis do libmypaint (categoria [MYPAINT]); vazio se o motor nativo não estiver disponível. */
+    fun setExtra(list: List<BrushPreset>) {
+        extraList = list
+    }
+
+    fun byIdOrNull(id: String): BrushPreset? =
+        all.firstOrNull { it.id == id } ?: extraList.firstOrNull { it.id == id } ?: customList.firstOrNull { it.id == id }
     fun byId(id: String): BrushPreset = byIdOrNull(id) ?: all.first()
     fun ofKind(kind: BrushKind): List<BrushPreset> = all.filter { it.kind == kind }
     fun categoriesOf(kind: BrushKind): List<String> =
-        if (kind == BrushKind.BRUSH) brushCategories + (if (customList.isNotEmpty()) listOf(CUSTOM) else emptyList()) else eraserCategories
+        if (kind == BrushKind.BRUSH) brushCategories + (if (extraList.isNotEmpty()) listOf(MYPAINT) else emptyList()) +
+            (if (customList.isNotEmpty()) listOf(CUSTOM) else emptyList()) else eraserCategories
 
     private fun norm(s: String): String =
         Normalizer.normalize(s.lowercase(), Normalizer.Form.NFD).replace(Regex("\\p{Mn}+"), "")
@@ -294,7 +305,7 @@ object BrushLibrary {
     /** Pesquisa por nome, categoria ou palavras-chave, sem diferenciar acentos nem maiúsculas (inclui os importados). */
     fun search(kind: BrushKind, query: String, category: String?): List<BrushPreset> {
         val q = norm(query.trim())
-        val pool = if (kind == BrushKind.BRUSH) all + customList else all
+        val pool = if (kind == BrushKind.BRUSH) all + extraList + customList else all
         return pool.filter {
             it.kind == kind && (category == null || it.category == category) &&
                 (q.isEmpty() || norm(it.name + " " + it.category + " " + it.keywords).contains(q))
