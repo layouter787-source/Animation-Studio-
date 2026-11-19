@@ -61,10 +61,36 @@ target_compile_options(mypaint PRIVATE -O2 -w)
 target_link_libraries(mypaint PUBLIC m)
 
 # ---------------------------------------------------------------------------------------------
+# AnimBrush: biblioteca de pincéis própria (C++17, sem dependências, ~500 pincéis).
+#
+# É opcional: se existir a pasta animbrush/ ao lado deste ficheiro (com include/ e src/ do AnimBrush), compila-se e
+# liga-se ao motor nativo; se não existir, a app compila e funciona sem os pincéis do AnimBrush.
+# Como a juntar: docs/ANIMBRUSH.md.
+# ---------------------------------------------------------------------------------------------
+set(ANIMBRUSH_DIR "${CMAKE_CURRENT_SOURCE_DIR}/animbrush")
+set(ANIMBRUSH_ENABLED FALSE)
+if(EXISTS "${ANIMBRUSH_DIR}/include/animbrush/animbrush.hpp" AND EXISTS "${ANIMBRUSH_DIR}/src/library.cpp")
+    file(GLOB ANIMBRUSH_SOURCES "${ANIMBRUSH_DIR}/src/*.cpp" "${ANIMBRUSH_DIR}/src/brushes/*.cpp")
+    add_library(animbrush STATIC ${ANIMBRUSH_SOURCES})
+    set_target_properties(animbrush PROPERTIES POSITION_INDEPENDENT_CODE ON CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON)
+    target_include_directories(animbrush PUBLIC "${ANIMBRUSH_DIR}/include")
+    target_compile_options(animbrush PRIVATE -O2 -w)
+    set(ANIMBRUSH_ENABLED TRUE)
+    message(STATUS "AnimBrush: ligado a partir de ${ANIMBRUSH_DIR}")
+else()
+    message(STATUS "AnimBrush: pasta animbrush/ não encontrada; a compilar sem os pincéis do AnimBrush")
+endif()
+
+# ---------------------------------------------------------------------------------------------
 # Motor nativo da app.
 # ---------------------------------------------------------------------------------------------
-add_library(animation_engine SHARED native-lib.cpp mypaint_engine.cpp)
+add_library(animation_engine SHARED native-lib.cpp mypaint_engine.cpp animbrush_jni.cpp)
 set_target_properties(animation_engine PROPERTIES CXX_STANDARD 17)
 
 find_library(log-lib log)
 target_link_libraries(animation_engine mypaint ${log-lib})
+
+if(ANIMBRUSH_ENABLED)
+    target_link_libraries(animation_engine animbrush)
+    target_compile_definitions(animation_engine PRIVATE ANIMBRUSH_ENABLED=1)
+endif()
