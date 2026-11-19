@@ -1,0 +1,228 @@
+diff --git a/app/src/main/java/com/animationstudio/ui/AnimationEditor.kt b/app/src/main/java/com/animationstudio/ui/AnimationEditor.kt
+index a2ffbdd..3f4a564 100644
+--- a/app/src/main/java/com/animationstudio/ui/AnimationEditor.kt
++++ b/app/src/main/java/com/animationstudio/ui/AnimationEditor.kt
+@@ -64,6 +64,7 @@ import androidx.compose.runtime.setValue
+ import androidx.compose.ui.Alignment
+ import androidx.compose.ui.Modifier
+ import androidx.compose.ui.draw.clip
++import androidx.compose.ui.draw.clipToBounds
+ import androidx.compose.ui.draw.rotate
+ import androidx.compose.ui.geometry.Offset
+ import androidx.compose.ui.geometry.Rect
+@@ -461,7 +462,7 @@ fun AnimationEditor(meta: ProjectMeta, initial: Project, store: ProjectStore, on
+ 
+     LaunchedEffect(canvasSize) {
+         if (canvasSize.width > 0 && !st.fitted) {
+-            st.view = ViewTransform.fitSheet(sw, sh, canvasSize.width.toFloat(), canvasSize.height.toFloat(), 12f)
++            st.view = ViewTransform.fitSheet(sw, sh, canvasSize.width.toFloat(), canvasSize.height.toFloat(), 4f)
+             st.fitted = true
+         }
+     }
+@@ -499,7 +500,7 @@ fun AnimationEditor(meta: ProjectMeta, initial: Project, store: ProjectStore, on
+                 if (!cameraMode) camView = false
+             },
+             onStudio = { toast("Modo Studio: em breve") },
+-            onFit = { st.view = ViewTransform.fitSheet(sw, sh, canvasSize.width.toFloat(), canvasSize.height.toFloat(), 12f) },
++            onFit = { st.view = ViewTransform.fitSheet(sw, sh, canvasSize.width.toFloat(), canvasSize.height.toFloat(), 4f) },
+             onReference = { if (refImage == null) refLauncher.launch("image/*") else refVisible = !refVisible },
+             onReferenceLong = { refLauncher.launch("image/*") },
+             refActive = refImage != null && refVisible,
+@@ -584,12 +585,8 @@ fun AnimationEditor(meta: ProjectMeta, initial: Project, store: ProjectStore, on
+             Row(Modifier.weight(1f).fillMaxWidth()) {
+                 if (!st.toolsRight) sideColumn()
+                 Box(
+-                    Modifier.weight(1f).fillMaxHeight()
+-                        .padding(
+-                            start = if (st.toolsRight) 6.dp else 0.dp, end = if (st.toolsRight) 0.dp else 6.dp,
+-                            top = if (st.timelineBottom) 6.dp else 0.dp, bottom = if (st.timelineBottom) 0.dp else 6.dp,
+-                        )
+-                        .clip(RoundedCornerShape(14.dp)).background(StudioColors.Workspace)
++                    // Espaço de trabalho sem moldura nem margem: vai de borda a borda entre as barras e a folha move-se livremente.
++                    Modifier.weight(1f).fillMaxHeight().clipToBounds().background(StudioColors.Workspace)
+                         .onSizeChanged { canvasSize = it }
+                         .onGloballyPositioned { canvasRoot = it.positionInRoot() }
+                 ) {
+@@ -1113,7 +1110,7 @@ fun AnimationEditor(meta: ProjectMeta, initial: Project, store: ProjectStore, on
+             onApply = { w, h ->
+                 sheetW = w
+                 sheetH = h
+-                st.view = ViewTransform.fitSheet(w.toFloat(), h.toFloat(), canvasSize.width.toFloat(), canvasSize.height.toFloat(), 12f)
++                st.view = ViewTransform.fitSheet(w.toFloat(), h.toFloat(), canvasSize.width.toFloat(), canvasSize.height.toFloat(), 4f)
+                 dialog = null
+             },
+             onDismiss = { dialog = null },
+diff --git a/app/src/main/java/com/animationstudio/ui/BrushDialog.kt b/app/src/main/java/com/animationstudio/ui/BrushDialog.kt
+index 8317543..0f7ca7d 100644
+--- a/app/src/main/java/com/animationstudio/ui/BrushDialog.kt
++++ b/app/src/main/java/com/animationstudio/ui/BrushDialog.kt
+@@ -25,6 +25,7 @@ import androidx.compose.foundation.text.BasicTextField
+ import androidx.compose.foundation.text.KeyboardOptions
+ import androidx.compose.material.icons.Icons
+ import androidx.compose.material.icons.filled.Add
++import androidx.compose.material.icons.filled.Check
+ import androidx.compose.material.icons.filled.Search
+ import androidx.compose.material3.Button
+ import androidx.compose.material3.Icon
+@@ -206,12 +207,12 @@ internal fun BrushLibraryDialog(
+                         for (t in tabs) {
+                             val sel = t == tab
+                             val label = when (t) {
+-                                BrushTab.LIST -> if (kind == BrushKind.BRUSH) "Pincéis" else "Borrachas"
++                                BrushTab.LIST -> if (kind == BrushKind.BRUSH) "Todos" else "Borrachas"
+                                 BrushTab.RECENT -> "Recentes"
+                                 BrushTab.CUSTOM -> "Personalizados"
+                             }
+                             Box(
+-                                Modifier.weight(1f).height(34.dp).clip(RoundedCornerShape(10.dp))
++                                Modifier.weight(1f).height(StudioDims.Cell).clip(RoundedCornerShape(10.dp))
+                                     .background(if (sel) StudioColors.Accent else StudioColors.Surface2)
+                                     .border(1.dp, if (sel) StudioColors.Accent else StudioColors.Outline, RoundedCornerShape(10.dp))
+                                     .clickable { tab = t; showCats = false },
+@@ -220,8 +221,14 @@ internal fun BrushLibraryDialog(
+                         }
+                     }
+                     Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
++                        // Confirmar: fecha a biblioteca (como o visto do esboço).
++                        Box(
++                            Modifier.size(StudioDims.Cell).clip(RoundedCornerShape(10.dp)).background(StudioColors.Accent)
++                                .clickable { onDismiss() },
++                            contentAlignment = Alignment.Center,
++                        ) { Icon(Icons.Default.Check, "Fechar", tint = Color.White, modifier = Modifier.size(StudioDims.Icon)) }
+                         Row(
+-                            Modifier.weight(1f).height(34.dp).clip(RoundedCornerShape(10.dp)).background(StudioColors.Surface2)
++                            Modifier.weight(1f).height(StudioDims.Cell).clip(RoundedCornerShape(10.dp)).background(StudioColors.Surface2)
+                                 .border(1.dp, StudioColors.Outline, RoundedCornerShape(10.dp)).padding(horizontal = 8.dp),
+                             verticalAlignment = Alignment.CenterVertically,
+                             horizontalArrangement = Arrangement.spacedBy(6.dp),
+@@ -241,7 +248,7 @@ internal fun BrushLibraryDialog(
+                         }
+                         if (tab == BrushTab.LIST) {
+                             Box(
+-                                Modifier.height(34.dp).clip(RoundedCornerShape(10.dp))
++                                Modifier.height(StudioDims.Cell).clip(RoundedCornerShape(10.dp))
+                                     .background(if (showCats) StudioColors.Accent else StudioColors.Surface2)
+                                     .border(1.dp, if (showCats) StudioColors.Accent else StudioColors.Outline, RoundedCornerShape(10.dp))
+                                     .clickable { showCats = !showCats }.padding(horizontal = 12.dp),
+@@ -251,11 +258,11 @@ internal fun BrushLibraryDialog(
+                         if (kind == BrushKind.BRUSH) {
+                             // Importar uma imagem do telemóvel como pincel (PNG com transparência).
+                             Box(
+-                                Modifier.size(34.dp).clip(RoundedCornerShape(10.dp)).background(StudioColors.Surface2)
++                                Modifier.size(StudioDims.Cell).clip(RoundedCornerShape(10.dp)).background(StudioColors.Surface2)
+                                     .border(1.dp, StudioColors.Outline, RoundedCornerShape(10.dp))
+                                     .clickable { picker.launch("image/*") },
+                                 contentAlignment = Alignment.Center,
+-                            ) { Icon(Icons.Default.Add, "Importar pincel de imagem", tint = StudioColors.Ink, modifier = Modifier.size(18.dp)) }
++                            ) { Icon(Icons.Default.Add, "Importar pincel de imagem", tint = StudioColors.Ink, modifier = Modifier.size(StudioDims.Icon)) }
+                         }
+                     }
+                     Text(
+diff --git a/app/src/main/java/com/animationstudio/ui/Render.kt b/app/src/main/java/com/animationstudio/ui/Render.kt
+index 6cf4c74..1fdc1ce 100644
+--- a/app/src/main/java/com/animationstudio/ui/Render.kt
++++ b/app/src/main/java/com/animationstudio/ui/Render.kt
+@@ -98,8 +98,10 @@ private class InkRender(
+     val bristleVariant: Int = 0,
+     /** Carimbos da natureza com várias cores (árvore, galho, relva). */
+     val tinted: List<TintBucket>? = null,
+-    /** Textura de um pincel importado de PNG (máscara branca com transparência): o traço é uma linha uniforme. */
+-    val tex: ImageBitmap? = null,
++    /** Pincel importado de PNG: faixa que segue o traço com a imagem esticada uma só vez (sem repetição). */
++    val strip: TexStrip? = null,
++    /** Toques calculados pelo libmypaint (11 valores por toque). */
++    val myDabs: FloatArray? = null,
+ )
+ 
+ private val dabCache = ConcurrentHashMap<Int, ImageBitmap>()
+@@ -686,7 +688,18 @@ private fun buildInk(s: BrushStroke): InkRender {
+     if (custom != null) {
+         val texture = CustomBrushes.tip(custom.id)
+         if (texture != null) {
+-            return InkRender(listOf(buildPass(s, s.width, 1f)), null, null, 0f, 0f, null, 0f, GrainKind.PAPER, tex = texture)
++            return InkRender(
++                listOf(buildPass(s, s.width, 1f)), null, null, 0f, 0f, null, 0f, GrainKind.PAPER,
++                strip = buildTexStrip(s.points, s.width, texture),
++            )
++        }
++    }
++    // Pincel do libmypaint: os toques vêm do motor nativo.
++    val mp = MyPaintBrushes.find(s.brush)
++    if (mp != null) {
++        val dabs = MyPaintBrushes.dabs(mp, s)
++        if (dabs != null) {
++            return InkRender(emptyList(), null, null, 0f, 0f, null, 0f, GrainKind.PAPER, myDabs = dabs)
+         }
+     }
+     val preset = if (s.brush.isNotEmpty()) BrushLibrary.byIdOrNull(s.brush) else null
+@@ -1042,6 +1055,9 @@ private fun shaded(c: Color, f: Float): Color = if (f < 0f) lerp(c, Color.Black,
+ 
+ /** [mono] = tudo na mesma cor (onion skin, borracha): os carimbos da natureza perdem as cores próprias. */
+ private fun DrawScope.drawRender(r: InkRender, rgb: Color, blend: BlendMode, mono: Boolean) {
++    r.myDabs?.let { drawMyPaintDabs(it, rgb, mono, blend); return }
++    val strip = r.strip
++    if (strip != null && !mono && drawTexStrip(strip, rgb)) return
+     val dabs = r.dabs
+     val lines = r.lines
+     val buckets = r.stampBuckets
+@@ -1068,21 +1084,6 @@ private fun DrawScope.drawGrain(strength: Float, kind: GrainKind, r: Rect) {
+     drawRect(ShaderBrush(shader), r.topLeft, r.size, blendMode = BlendMode.DstIn)
+ }
+ 
+-/**
+- * Textura de um pincel importado de PNG: a imagem é ajustada à largura do traço e só fica tinta onde o PNG tem
+- * opacidade. A linha continua uniforme; não se carimba a ponta.
+- */
+-private fun DrawScope.drawPngTexture(tex: ImageBitmap, width: Float, r: Rect) {
+-    val k = max(1f, width) / max(tex.width, tex.height).toFloat()
+-    val shader = ImageShader(tex, TileMode.Repeated, TileMode.Repeated)
+-    withTransform({ scale(k, k, Offset.Zero) }) {
+-        drawRect(
+-            ShaderBrush(shader), Offset(r.left / k, r.top / k), Size(r.width / k, r.height / k),
+-            blendMode = BlendMode.DstIn,
+-        )
+-    }
+-}
+-
+ /**
+  * Desenha um traço. A opacidade vem do alfa da cor (a da borracha também: a borracha pode apagar só em parte);
+  * a borracha usa DstOut (apaga a opacidade, não pinta de branco).
+@@ -1104,7 +1105,7 @@ internal fun DrawScope.drawInk(s: BrushStroke, tint: Color?, useCache: Boolean)
+         s.mode == 2 -> BlendMode.DstOver
+         else -> BlendMode.SrcOver
+     }
+-    val needLayer = alpha < 0.999f || (!s.erase && s.mode != 0) || render.dabs != null || render.grain > 0f || render.tex != null
++    val needLayer = alpha < 0.999f || (!s.erase && s.mode != 0) || render.dabs != null || render.grain > 0f || render.myDabs != null
+     if (!needLayer) {
+         // Borracha total: duas passagens DstOut tiram o fio de anti-aliasing que sobrava nas bordas ((1-c)² em vez de (1-c)).
+         val passes = if (s.erase) 2 else 1
+@@ -1120,8 +1121,6 @@ internal fun DrawScope.drawInk(s: BrushStroke, tint: Color?, useCache: Boolean)
+     drawContext.canvas.saveLayer(rect, paint)
+     drawRender(render, rgb, BlendMode.SrcOver, mono)
+     if (render.grain > 0f) drawGrain(render.grain, render.grainKind, rect)
+-    val tex = render.tex
+-    if (tex != null) drawPngTexture(tex, s.width, rect)
+     drawContext.canvas.restore()
+ }
+ 
+@@ -1316,7 +1315,7 @@ internal fun DrawScope.drawElements(
+     }
+     drawContext.canvas.restore()
+     drawContext.canvas.saveLayer(all, Paint())
+-    for (i in strokes.indices) if (strokes[i].fill == null) one(i)
++    for (i in strokes.indices) if (strokes[i].fill == null || strokes[i].erase) one(i)
+     drawContext.canvas.restore()
+ }
+ 
+diff --git a/docs/RASTREABILIDADE.md b/docs/RASTREABILIDADE.md
+index abe6b25..5107c7e 100644
+--- a/docs/RASTREABILIDADE.md
++++ b/docs/RASTREABILIDADE.md
+@@ -70,3 +70,7 @@ Estados: `PENDENTE`, `EM IMPLEMENTAÇÃO`, `IMPLEMENTADO`, `TESTADO`, `BLOQUEADO
+ ## Níveis de evidência
+ 
+ 1. Código escrito → 2. Compila no CI → 3. Testes unitários verdes no CI → 4. Validado em emulador/dispositivo. Os itens de domínio estão no nível 3; a UI está no nível 2.
++
++## libmypaint e pincéis (ver docs/LIBMYPAINT.md)
++- libmypaint (ISC): https://github.com/mypaint/libmypaint, commit `d5a88fb`, obtido no build.
++- mypaint-brushes (CC0): definições de pincel em `assets/mypaint_brushes.txt`.
