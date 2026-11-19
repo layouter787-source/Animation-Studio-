@@ -291,12 +291,24 @@ object BrushLibrary {
         extraList = list
     }
 
+    @Volatile
+    private var animList: List<BrushPreset> = emptyList()
+
+    /**
+     * Define os pincéis do AnimBrush (ver [AnimBrushCatalog]); cada um fica na sua categoria "AnimBrush · …".
+     * Vazio se a biblioteca nativa não estiver compilada na app.
+     */
+    fun setAnimBrush(list: List<BrushPreset>) {
+        animList = list
+    }
+
     fun byIdOrNull(id: String): BrushPreset? =
-        all.firstOrNull { it.id == id } ?: extraList.firstOrNull { it.id == id } ?: customList.firstOrNull { it.id == id }
+        all.firstOrNull { it.id == id } ?: extraList.firstOrNull { it.id == id } ?: animList.firstOrNull { it.id == id } ?: customList.firstOrNull { it.id == id }
     fun byId(id: String): BrushPreset = byIdOrNull(id) ?: all.first()
     fun ofKind(kind: BrushKind): List<BrushPreset> = all.filter { it.kind == kind }
     fun categoriesOf(kind: BrushKind): List<String> =
         if (kind == BrushKind.BRUSH) brushCategories + (if (extraList.isNotEmpty()) listOf(MYPAINT) else emptyList()) +
+            animList.filter { it.kind == BrushKind.BRUSH }.map { it.category }.distinct() +
             (if (customList.isNotEmpty()) listOf(CUSTOM) else emptyList()) else eraserCategories
 
     private fun norm(s: String): String =
@@ -305,7 +317,7 @@ object BrushLibrary {
     /** Pesquisa por nome, categoria ou palavras-chave, sem diferenciar acentos nem maiúsculas (inclui os importados). */
     fun search(kind: BrushKind, query: String, category: String?): List<BrushPreset> {
         val q = norm(query.trim())
-        val pool = if (kind == BrushKind.BRUSH) all + extraList + customList else all
+        val pool = if (kind == BrushKind.BRUSH) all + extraList + animList + customList else all
         return pool.filter {
             it.kind == kind && (category == null || it.category == category) &&
                 (q.isEmpty() || norm(it.name + " " + it.category + " " + it.keywords).contains(q))
