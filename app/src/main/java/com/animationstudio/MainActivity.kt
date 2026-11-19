@@ -27,6 +27,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
@@ -73,6 +74,7 @@ import com.animationstudio.ui.studioCard
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.io.File
 import java.text.DateFormat
 import java.util.Date
 import java.util.UUID
@@ -84,10 +86,30 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         System.loadLibrary("animation_engine")
         hideSystemBars()
+        // Relatório de falhas: se o app fechar por um erro, o texto fica guardado e é mostrado na próxima abertura.
+        val crashFile = File(filesDir, "last_crash.txt")
+        val previous = try { if (crashFile.exists()) crashFile.readText() else null } catch (e: Exception) { null }
+        val oldHandler = Thread.getDefaultUncaughtExceptionHandler()
+        Thread.setDefaultUncaughtExceptionHandler { t, e ->
+            try {
+                crashFile.writeText("Thread: " + t.name + "\n" + android.util.Log.getStackTraceString(e))
+            } catch (_: Exception) {
+            }
+            oldHandler?.uncaughtException(t, e)
+        }
         val store = ProjectStore(applicationContext)
         setContent {
             StudioTheme {
-                StudioApp(store = store, onProjectOpened = { nativeEngineStatus() })
+                var report by remember { mutableStateOf(previous) }
+                val r = report
+                if (r != null) {
+                    CrashScreen(r) {
+                        try { crashFile.delete() } catch (_: Exception) { }
+                        report = null
+                    }
+                } else {
+                    StudioApp(store = store, onProjectOpened = { nativeEngineStatus() })
+                }
             }
         }
     }
@@ -101,6 +123,22 @@ class MainActivity : ComponentActivity() {
         val controller = WindowCompat.getInsetsController(window, window.decorView)
         controller.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
         controller.hide(WindowInsetsCompat.Type.systemBars())
+    }
+}
+
+/** Mostra o erro da última falha (texto selecionável) para poder ser enviado e corrigido. */
+@Composable
+private fun CrashScreen(report: String, onClose: () -> Unit) {
+    Surface(color = StudioColors.Navy, modifier = Modifier.fillMaxSize()) {
+        Column(Modifier.fillMaxSize().padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text("O app fechou por um erro na última vez. Envie este texto para correção:", style = StudioType.Title)
+            Box(Modifier.weight(1f).fillMaxWidth().studioCard(12.dp).verticalScroll(rememberScrollState()).padding(10.dp)) {
+                SelectionContainer { Text(report, style = StudioType.Body) }
+            }
+            Button(onClick = onClose, shape = RoundedCornerShape(12.dp)) {
+                Text("Continuar", style = StudioType.Label.copy(color = Color.White))
+            }
+        }
     }
 }
 
