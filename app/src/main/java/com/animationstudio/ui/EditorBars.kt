@@ -178,12 +178,12 @@ internal fun TopBar(
     ) {
         Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                GripHandle(Modifier.size(width = 16.dp, height = 30.dp), onGripEnd)
-                ToolCell(width = 30.dp, height = 30.dp, onClick = onMenu) { PanelGlyph(it) }
+                GripHandle(Modifier.size(width = 16.dp, height = StudioDims.Cell), onGripEnd)
+                ToolCell(onClick = onMenu) { PanelGlyph(it) }
             }
             Row {
                 Spacer(Modifier.width(16.dp))
-                ToolCell(width = 30.dp, height = 30.dp, onClick = onAdd) { Text("+", style = StudioType.Title.copy(color = it)) }
+                ToolCell(onClick = onAdd) { Text("+", style = StudioType.Title.copy(color = it)) }
             }
         }
         Row(
@@ -290,15 +290,15 @@ internal fun TopBar(
         Column(verticalArrangement = Arrangement.spacedBy(3.dp), horizontalAlignment = Alignment.End) {
             // Câmara, Studio (curvas; em breve) e ajustar à folha.
             Row(horizontalArrangement = Arrangement.spacedBy(3.dp), verticalAlignment = Alignment.CenterVertically) {
-                ToolCell(width = 30.dp, height = 30.dp, selected = cameraActive, onClick = onCamera) { Icon(Icons.Default.Videocam, "Câmara", tint = it, modifier = Modifier.size(17.dp)) }
-                ToolCell(width = 30.dp, height = 30.dp, onClick = onStudio) { Icon(Icons.Default.ShowChart, "Studio", tint = it, modifier = Modifier.size(17.dp)) }
-                ToolCell(width = 30.dp, height = 30.dp, onClick = onFit) { Icon(Icons.Default.FitScreen, "Ajustar à folha", tint = it, modifier = Modifier.size(17.dp)) }
+                ToolCell(selected = cameraActive, onClick = onCamera) { Icon(Icons.Default.Videocam, "Câmara", tint = it, modifier = Modifier.size(StudioDims.Icon)) }
+                ToolCell(onClick = onStudio) { Icon(Icons.Default.ShowChart, "Studio", tint = it, modifier = Modifier.size(StudioDims.Icon)) }
+                ToolCell(onClick = onFit) { Icon(Icons.Default.FitScreen, "Ajustar à folha", tint = it, modifier = Modifier.size(StudioDims.Icon)) }
             }
             // Cor (círculo): toque abre a roda de cores; arrastar para a folha pinta a região onde se solta. Onion ao lado.
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(3.dp)) {
                 CheckerBox(
                     Color(st.colorArgb),
-                    Modifier.size(30.dp).clip(CircleShape)
+                    Modifier.size(StudioDims.Cell).clip(CircleShape)
                         .border(2.dp, StudioColors.Ink, CircleShape)
                         .onGloballyPositioned { swatchRoot = it.positionInRoot() }
                         .pointerInput(Unit) {
@@ -315,12 +315,12 @@ internal fun TopBar(
                         }
                         .clickable { onColor(ColorMethod.DISC) }
                 )
-                Box(Modifier.size(width = 20.dp, height = 28.dp).clickable(onClick = onOnionOptions), contentAlignment = Alignment.Center) {
+                Box(Modifier.size(width = 20.dp, height = StudioDims.Cell).clickable(onClick = onOnionOptions), contentAlignment = Alignment.Center) {
                     DotsGlyph(StudioColors.InkDim)
                 }
                 val shape = RoundedCornerShape(9.dp)
                 Box(
-                    Modifier.height(28.dp).clip(shape)
+                    Modifier.height(StudioDims.Cell).clip(shape)
                         .background(if (st.onionOn) StudioColors.Accent else StudioColors.Surface2)
                         .border(1.dp, if (st.onionOn) StudioColors.Accent else StudioColors.Outline, shape)
                         .clickable { st.onionOn = !st.onionOn }.padding(horizontal = 12.dp),
@@ -328,8 +328,8 @@ internal fun TopBar(
                 ) { Text("Onion", style = StudioType.Label.copy(fontSize = 11.sp)) }
             }
             // Janela de referência: toque mostra ou esconde; toque longo troca a imagem.
-            ToolCell(width = 30.dp, height = 28.dp, selected = refActive, onLongClick = onReferenceLong, onClick = onReference) {
-                Icon(Icons.Default.Image, "Referência", tint = it, modifier = Modifier.size(17.dp))
+            ToolCell(selected = refActive, onLongClick = onReferenceLong, onClick = onReference) {
+                Icon(Icons.Default.Image, "Referência", tint = it, modifier = Modifier.size(StudioDims.Icon))
             }
         }
     }
