@@ -23,6 +23,7 @@ import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -40,6 +41,7 @@ import androidx.compose.material.icons.filled.Videocam
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -210,6 +212,13 @@ private fun TopBarLayers(
     val curMove by rememberUpdatedState(onMoveLayer)
     val hScroll = rememberScrollState()
     val vScroll = rememberScrollState()
+    val curFrame = st.project.currentFrame
+    val stepPxAuto = with(LocalDensity.current) { (cellW + 3.dp).toPx() }
+    LaunchedEffect(curFrame) {
+        // Mantém o frame atual visível na janela estreita.
+        val target = (curFrame * stepPxAuto - 2 * stepPxAuto).toInt().coerceAtLeast(0)
+        hScroll.animateScrollTo(target.coerceAtMost(hScroll.maxValue))
+    }
     Row(
         modifier.studioCard(12.dp).heightIn(max = if (expanded) rowH * 5 + 6.dp else rowH * 2 + 6.dp)
             .verticalScroll(vScroll).padding(3.dp)
@@ -243,7 +252,8 @@ private fun TopBarLayers(
                 }
             }
         }
-        Box(Modifier.weight(1f, fill = false).horizontalScroll(hScroll)) {
+        // A janela de frames mostra só ~5 células e desloca-se: a barra não estica com o número de frames.
+        Box(Modifier.widthIn(max = (cellW + 3.dp) * 5).weight(1f, fill = false).horizontalScroll(hScroll)) {
             Column {
                 for (l in rows) {
                     FrameRow(st, l, sw, sh, cellW, cellH, rowH, cameraKeys, onFrameOptions)
