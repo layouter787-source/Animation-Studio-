@@ -16,7 +16,8 @@ fun BrushStroke.bounds(): Bounds? {
     val f = fill
     if (f != null) return Bounds(f.x * f.unit, f.y * f.unit, (f.x + f.w) * f.unit, (f.y + f.h) * f.unit)
     if (points.isEmpty()) return null
-    val r = width / 2f
+    // Os pincéis da AnimBrush pintam fora do caminho (ramos, chamas, brilho): a caixa tem de os cobrir.
+    val r = width / 2f + (if (brush.startsWith("ab:")) max(48f, width * 2f) else 0f)
     return Bounds(
         points.minOf { it.x } - r, points.minOf { it.y } - r,
         points.maxOf { it.x } + r, points.maxOf { it.y } + r,

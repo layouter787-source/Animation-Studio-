@@ -17,17 +17,17 @@ import kotlin.math.min
 import kotlin.math.roundToInt
 
 /**
- * Pincéis que o utilizador importa de um PNG com fundo transparente. O PNG é a TEXTURA do pincel: o traço é uma
- * linha contínua e uniforme (como um pincel normal) e só fica a tinta onde o PNG tem opacidade; a textura cobre a
- * largura do traço. Não se carimba a ponta repetidamente. Só se aceitam PNG com transparência: sem ela não há forma
- * de saber o que é tinta. A máscara fica guardada em 192×192 na pasta privada da app e o pincel usa a cor escolhida.
- * As imagens ficam só no telemóvel do utilizador: a app não traz nenhuma.
+ * Pincéis que o utilizador importa de um PNG com fundo transparente. O PNG é a PONTA do pincel: é carimbada ao
+ * longo do traço no seu tamanho, sem esticar nem deformar (ver [buildTipStamps]), como num pincel de carimbo nativo.
+ * O espaçamento entre carimbos decide se o traço sai contínuo ou como uma fila de pontas. Só se aceitam PNG com
+ * transparência: sem ela não há forma de saber o que é tinta. A máscara fica guardada em 192×192 na pasta privada
+ * da app e o pincel usa a cor escolhida. As imagens ficam só no telemóvel do utilizador: a app não traz nenhuma.
  */
 internal object CustomBrushes {
     internal class Entry(val id: String, val name: String, val spacing: Float)
 
     private const val TIP_SIDE = 192
-    private const val DEFAULT_SPACING = 0.2f
+    private const val DEFAULT_SPACING = 0.25f
 
     @Volatile private var entries: List<Entry> = emptyList()
     @Volatile private var loaded = false

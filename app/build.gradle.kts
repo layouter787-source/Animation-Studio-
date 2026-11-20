@@ -43,6 +43,8 @@ android {
     sourceSets {
         getByName("main") {
             res.srcDir(layout.buildDirectory.dir("generated/icon-res"))
+            // Texturas da AnimBrush (stamps.abpack), copiadas de third_party/AnimBrush/assets se existirem.
+            assets.srcDir(layout.buildDirectory.dir("generated/animbrush-assets"))
         }
     }
 
@@ -100,8 +102,17 @@ val generateLauncherIcon by tasks.registering {
     }
 }
 
+// AnimBrush: só o pack de texturas vai para os assets (os PNG originais ficam de fora). Sem a pasta, não faz nada.
+val copyAnimBrushPack by tasks.registering(Copy::class) {
+    val pack = rootProject.layout.projectDirectory.file("third_party/AnimBrush/assets/stamps.abpack").asFile
+    from(pack)
+    into(layout.buildDirectory.dir("generated/animbrush-assets"))
+    onlyIf { pack.exists() }
+}
+
 tasks.named("preBuild") {
     dependsOn(generateLauncherIcon)
+    dependsOn(copyAnimBrushPack)
 }
 
 dependencies {
