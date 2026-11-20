@@ -158,6 +158,48 @@ internal fun TopBar(
     /** Ids dos frames que têm keyframe de câmara (marcados com um losango âmbar). */
     cameraKeys: Set<Long> = emptySet(),
 ) {
+    // A barra está dividida em três funções pequenas (esquerda, camadas e frames, direita): evita uma única função
+    // enorme com dezenas de nós aninhados.
+    Row(
+        modifier.fillMaxWidth().background(StudioColors.Navy).padding(4.dp),
+        horizontalArrangement = Arrangement.spacedBy(4.dp),
+        verticalAlignment = Alignment.Top,
+    ) {
+        TopBarLeft(onGripEnd, onMenu, onAdd)
+        TopBarLayers(st, sw, sh, expanded, onLayerOptions, onMoveLayer, onFrameOptions, cameraKeys, Modifier.weight(1f))
+        TopBarRight(
+            st, cameraActive, onCamera, onStudio, onFit, onColor, onOnionOptions, onReference, onReferenceLong, refActive,
+            onSwatchDrag, onSwatchDrop, onSwatchCancel,
+        )
+    }
+}
+
+@Composable
+private fun TopBarLeft(onGripEnd: (Float, Float) -> Unit, onMenu: () -> Unit, onAdd: () -> Unit) {
+    Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            GripHandle(Modifier.size(width = 16.dp, height = StudioDims.Cell), onGripEnd)
+            ToolCell(onClick = onMenu) { PanelGlyph(it) }
+        }
+        Row {
+            Spacer(Modifier.width(16.dp))
+            ToolCell(onClick = onAdd) { Text("+", style = StudioType.Title.copy(color = it)) }
+        }
+    }
+}
+
+@Composable
+private fun TopBarLayers(
+    st: EditorState,
+    sw: Int,
+    sh: Int,
+    expanded: Boolean,
+    onLayerOptions: (Layer) -> Unit,
+    onMoveLayer: (Long, Int) -> Unit,
+    onFrameOptions: (Int) -> Unit,
+    cameraKeys: Set<Long>,
+    modifier: Modifier,
+) {
     val all = st.project.layers.asReversed()
     val rows = if (expanded) all else all.take(2)
     val cellW = 44.dp
@@ -165,172 +207,190 @@ internal fun TopBar(
     val rowH = cellH + 3.dp
     val rowPx = with(LocalDensity.current) { rowH.toPx() }
     val curMove by rememberUpdatedState(onMoveLayer)
+    val hScroll = rememberScrollState()
+    val vScroll = rememberScrollState()
+    Row(
+        modifier.studioCard(12.dp).heightIn(max = if (expanded) rowH * 5 + 6.dp else rowH * 2 + 6.dp)
+            .verticalScroll(vScroll).padding(3.dp)
+    ) {
+        Column(Modifier.width(104.dp)) {
+            for (l in rows) {
+                val isActive = l.id == st.activeLayerId
+                val chipShape = RoundedCornerShape(8.dp)
+                // Sem pontos coloridos: a camada ativa distingue-se só pelo fundo e pelo contorno.
+                // Tocar numa camada que já está ativa abre as opções dela (visibilidade, opacidade, nome, apagar).
+                Row(
+                    Modifier.height(rowH).padding(vertical = 1.dp, horizontal = 1.dp).fillMaxWidth().clip(chipShape)
+                        .background(if (isActive) StudioColors.AccentSoft else StudioColors.Surface2)
+                        .border(1.dp, if (isActive) StudioColors.Accent else StudioColors.Outline, chipShape)
+                        .pointerInput(l.id) {
+                            var acc = 0f
+                            detectVerticalDragGestures(onDragStart = { acc = 0f }) { change, dy ->
+                                change.consume()
+                                acc += dy
+                                if (acc > rowPx) { curMove(l.id, -1); acc = 0f } else if (acc < -rowPx) { curMove(l.id, 1); acc = 0f }
+                            }
+                        }
+                        .clickable { if (isActive) onLayerOptions(l) else st.activeLayerId = l.id }
+                        .padding(horizontal = 9.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        l.name, style = StudioType.Label.copy(fontSize = 11.sp), maxLines = 1, overflow = TextOverflow.Ellipsis,
+                        textDecoration = if (l.visible) TextDecoration.None else TextDecoration.LineThrough,
+                    )
+                }
+            }
+        }
+        Box(Modifier.weight(1f).horizontalScroll(hScroll)) {
+            Column {
+                for (l in rows) {
+                    FrameRow(st, l, sw, sh, cellW, cellH, rowH, cameraKeys, onFrameOptions)
+                }
+            }
+            // Pega de duração: fica no fim da exposição do frame atual. Arrastar para a direita estende a duração
+            // (acrescenta frames que partilham o desenho); para a esquerda encurta.
+            if (!st.playing) {
+                val proj = st.project
+                val endIdx = proj.holdEnd(proj.currentFrame)
+                val stepDp = cellW + 3.dp
+                val stepPx = with(LocalDensity.current) { stepDp.toPx() }
+                val activeRow = rows.indexOfFirst { it.id == st.activeLayerId }.coerceAtLeast(0)
+                Box(
+                    Modifier.offset(x = stepDp * (endIdx + 1) - 11.dp, y = rowH * activeRow + (rowH - cellH) / 2f)
+                        .size(width = 10.dp, height = cellH).clip(RoundedCornerShape(4.dp)).background(StudioColors.Accent)
+                        .pointerInput(stepPx) {
+                            var acc = 0f
+                            detectHorizontalDragGestures(onDragStart = { acc = 0f }) { change, dx ->
+                                change.consume()
+                                acc += dx
+                                while (acc >= stepPx) { st.holdSteps(1); acc -= stepPx }
+                                while (acc <= -stepPx) { st.holdSteps(-1); acc += stepPx }
+                            }
+                        },
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Box(Modifier.size(width = 2.dp, height = cellH * 0.5f).background(Color.White.copy(alpha = 0.85f)))
+                }
+            }
+        }
+    }
+}
+
+/** Uma linha de frames (uma camada): células com miniatura e número. */
+@Composable
+private fun FrameRow(
+    st: EditorState,
+    l: Layer,
+    sw: Int,
+    sh: Int,
+    cellW: Dp,
+    cellH: Dp,
+    rowH: Dp,
+    cameraKeys: Set<Long>,
+    onFrameOptions: (Int) -> Unit,
+) {
+    Row(Modifier.height(rowH), verticalAlignment = Alignment.CenterVertically) {
+        st.project.frameIds.forEachIndexed { i, fid ->
+            val strokes = l.drawingAt(fid)?.strokes
+            val isCurrent = i == st.project.currentFrame
+            val shape = RoundedCornerShape(6.dp)
+            // Tocar num frame que já está selecionado (na mesma camada) abre as opções do frame.
+            Box(
+                Modifier.padding(horizontal = 1.5.dp).size(width = cellW, height = cellH).clip(shape)
+                    .background(if (strokes != null) Color.White else StudioColors.Surface2)
+                    .border(if (isCurrent) 2.dp else 1.dp, if (isCurrent) StudioColors.Accent else StudioColors.Outline, shape)
+                    .clickable {
+                        if (isCurrent && st.activeLayerId == l.id) {
+                            onFrameOptions(i)
+                        } else {
+                            st.activeLayerId = l.id
+                            st.selectFrame(i)
+                        }
+                    },
+            ) {
+                if (strokes != null) {
+                    Canvas(Modifier.fillMaxSize()) { drawThumbnail(strokes, sw.toFloat(), sh.toFloat()) }
+                }
+                Text(
+                    "${i + 1}",
+                    style = StudioType.Caption.copy(fontSize = 8.sp, color = if (strokes != null) Color(0xFF30384F) else StudioColors.InkDim),
+                    modifier = Modifier.align(Alignment.TopStart).padding(start = 3.dp, top = 1.dp),
+                )
+                if (fid in cameraKeys) {
+                    Box(
+                        Modifier.align(Alignment.BottomStart).padding(start = 5.dp, bottom = 4.dp)
+                            .size(7.dp).rotate(45f).background(StudioColors.Amber)
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun TopBarRight(
+    st: EditorState,
+    cameraActive: Boolean,
+    onCamera: () -> Unit,
+    onStudio: () -> Unit,
+    onFit: () -> Unit,
+    onColor: (ColorMethod) -> Unit,
+    onOnionOptions: () -> Unit,
+    onReference: () -> Unit,
+    onReferenceLong: () -> Unit,
+    refActive: Boolean,
+    onSwatchDrag: (Offset) -> Unit,
+    onSwatchDrop: (Offset) -> Unit,
+    onSwatchCancel: () -> Unit,
+) {
     val curSwDrag by rememberUpdatedState(onSwatchDrag)
     val curSwDrop by rememberUpdatedState(onSwatchDrop)
     val curSwCancel by rememberUpdatedState(onSwatchCancel)
     var swatchRoot by remember { mutableStateOf(Offset.Zero) }
-    val hScroll = rememberScrollState()
-    val vScroll = rememberScrollState()
-    Row(
-        modifier.fillMaxWidth().background(StudioColors.Navy).padding(4.dp),
-        horizontalArrangement = Arrangement.spacedBy(4.dp),
-        verticalAlignment = Alignment.Top,
-    ) {
-        Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                GripHandle(Modifier.size(width = 16.dp, height = StudioDims.Cell), onGripEnd)
-                ToolCell(onClick = onMenu) { PanelGlyph(it) }
-            }
-            Row {
-                Spacer(Modifier.width(16.dp))
-                ToolCell(onClick = onAdd) { Text("+", style = StudioType.Title.copy(color = it)) }
-            }
+    Column(verticalArrangement = Arrangement.spacedBy(3.dp), horizontalAlignment = Alignment.End) {
+        // Câmara, Studio (curvas; em breve) e ajustar à folha.
+        Row(horizontalArrangement = Arrangement.spacedBy(3.dp), verticalAlignment = Alignment.CenterVertically) {
+            ToolCell(selected = cameraActive, onClick = onCamera) { Icon(Icons.Default.Videocam, "Câmara", tint = it, modifier = Modifier.size(StudioDims.Icon)) }
+            ToolCell(onClick = onStudio) { Icon(Icons.Default.ShowChart, "Studio", tint = it, modifier = Modifier.size(StudioDims.Icon)) }
+            ToolCell(onClick = onFit) { Icon(Icons.Default.FitScreen, "Ajustar à folha", tint = it, modifier = Modifier.size(StudioDims.Icon)) }
         }
-        Row(
-            Modifier.weight(1f).studioCard(12.dp).heightIn(max = if (expanded) rowH * 5 + 6.dp else rowH * 2 + 6.dp)
-                .verticalScroll(vScroll).padding(3.dp)
-        ) {
-            Column(Modifier.width(104.dp)) {
-                for (l in rows) {
-                    val isActive = l.id == st.activeLayerId
-                    val chipShape = RoundedCornerShape(8.dp)
-                    // Sem pontos coloridos: a camada ativa distingue-se só pelo fundo e pelo contorno.
-                    // Tocar numa camada que já está ativa abre as opções dela (visibilidade, opacidade, nome, apagar).
-                    Row(
-                        Modifier.height(rowH).padding(vertical = 1.dp, horizontal = 1.dp).fillMaxWidth().clip(chipShape)
-                            .background(if (isActive) StudioColors.AccentSoft else StudioColors.Surface2)
-                            .border(1.dp, if (isActive) StudioColors.Accent else StudioColors.Outline, chipShape)
-                            .pointerInput(l.id) {
-                                var acc = 0f
-                                detectVerticalDragGestures(onDragStart = { acc = 0f }) { change, dy ->
-                                    change.consume()
-                                    acc += dy
-                                    if (acc > rowPx) { curMove(l.id, -1); acc = 0f } else if (acc < -rowPx) { curMove(l.id, 1); acc = 0f }
-                                }
-                            }
-                            .clickable { if (isActive) onLayerOptions(l) else st.activeLayerId = l.id }
-                            .padding(horizontal = 9.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Text(
-                            l.name, style = StudioType.Label.copy(fontSize = 11.sp), maxLines = 1, overflow = TextOverflow.Ellipsis,
-                            textDecoration = if (l.visible) TextDecoration.None else TextDecoration.LineThrough,
-                        )
-                    }
-                }
-            }
-            Box(Modifier.weight(1f).horizontalScroll(hScroll)) {
-                Column {
-                    for (l in rows) {
-                        Row(Modifier.height(rowH), verticalAlignment = Alignment.CenterVertically) {
-                            st.project.frameIds.forEachIndexed { i, fid ->
-                                val strokes = l.drawingAt(fid)?.strokes
-                                val isCurrent = i == st.project.currentFrame
-                                val shape = RoundedCornerShape(6.dp)
-                                // Tocar num frame que já está selecionado (na mesma camada) abre as opções do frame.
-                                Box(
-                                    Modifier.padding(horizontal = 1.5.dp).size(width = cellW, height = cellH).clip(shape)
-                                        .background(if (strokes != null) Color.White else StudioColors.Surface2)
-                                        .border(if (isCurrent) 2.dp else 1.dp, if (isCurrent) StudioColors.Accent else StudioColors.Outline, shape)
-                                        .clickable {
-                                            if (isCurrent && st.activeLayerId == l.id) {
-                                                onFrameOptions(i)
-                                            } else {
-                                                st.activeLayerId = l.id
-                                                st.selectFrame(i)
-                                            }
-                                        },
-                                ) {
-                                    if (strokes != null) {
-                                        Canvas(Modifier.fillMaxSize()) { drawThumbnail(strokes, sw.toFloat(), sh.toFloat()) }
-                                    }
-                                    Text(
-                                        "${i + 1}",
-                                        style = StudioType.Caption.copy(fontSize = 8.sp, color = if (strokes != null) Color(0xFF30384F) else StudioColors.InkDim),
-                                        modifier = Modifier.align(Alignment.TopStart).padding(start = 3.dp, top = 1.dp),
-                                    )
-                                    if (fid in cameraKeys) {
-                                        Box(
-                                            Modifier.align(Alignment.BottomStart).padding(start = 5.dp, bottom = 4.dp)
-                                                .size(7.dp).rotate(45f).background(StudioColors.Amber)
-                                        )
-                                    }
-                                }
-                            }
+        // Cor (círculo): toque abre a roda de cores; arrastar para a folha pinta a região onde se solta. Onion ao lado.
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(3.dp)) {
+            CheckerBox(
+                Color(st.colorArgb),
+                Modifier.size(StudioDims.Cell).clip(CircleShape)
+                    .border(2.dp, StudioColors.Ink, CircleShape)
+                    .onGloballyPositioned { swatchRoot = it.positionInRoot() }
+                    .pointerInput(Unit) {
+                        var cur = Offset.Zero
+                        detectDragGestures(
+                            onDragStart = { o -> cur = swatchRoot + o; curSwDrag(cur) },
+                            onDragEnd = { curSwDrop(cur) },
+                            onDragCancel = { curSwCancel() },
+                        ) { change, d ->
+                            change.consume()
+                            cur += d
+                            curSwDrag(cur)
                         }
                     }
-                }
-                // Pega de duração: fica no fim da exposição do frame atual. Arrastar para a direita estende a duração
-                // (acrescenta frames que partilham o desenho); para a esquerda encurta.
-                if (!st.playing) {
-                    val proj = st.project
-                    val endIdx = proj.holdEnd(proj.currentFrame)
-                    val stepDp = cellW + 3.dp
-                    val stepPx = with(LocalDensity.current) { stepDp.toPx() }
-                    val activeRow = rows.indexOfFirst { it.id == st.activeLayerId }.coerceAtLeast(0)
-                    Box(
-                        Modifier.offset(x = stepDp * (endIdx + 1) - 11.dp, y = rowH * activeRow + (rowH - cellH) / 2f)
-                            .size(width = 10.dp, height = cellH).clip(RoundedCornerShape(4.dp)).background(StudioColors.Accent)
-                            .pointerInput(stepPx) {
-                                var acc = 0f
-                                detectHorizontalDragGestures(onDragStart = { acc = 0f }) { change, dx ->
-                                    change.consume()
-                                    acc += dx
-                                    while (acc >= stepPx) { st.holdSteps(1); acc -= stepPx }
-                                    while (acc <= -stepPx) { st.holdSteps(-1); acc += stepPx }
-                                }
-                            },
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        Box(Modifier.size(width = 2.dp, height = cellH * 0.5f).background(Color.White.copy(alpha = 0.85f)))
-                    }
-                }
+                    .clickable { onColor(ColorMethod.DISC) }
+            )
+            Box(Modifier.size(width = 20.dp, height = StudioDims.Cell).clickable(onClick = onOnionOptions), contentAlignment = Alignment.Center) {
+                DotsGlyph(StudioColors.InkDim)
             }
+            val shape = RoundedCornerShape(9.dp)
+            Box(
+                Modifier.height(StudioDims.Cell).clip(shape)
+                    .background(if (st.onionOn) StudioColors.Accent else StudioColors.Surface2)
+                    .border(1.dp, if (st.onionOn) StudioColors.Accent else StudioColors.Outline, shape)
+                    .clickable { st.onionOn = !st.onionOn }.padding(horizontal = 12.dp),
+                contentAlignment = Alignment.Center,
+            ) { Text("Onion", style = StudioType.Label.copy(fontSize = 11.sp)) }
         }
-        Column(verticalArrangement = Arrangement.spacedBy(3.dp), horizontalAlignment = Alignment.End) {
-            // Câmara, Studio (curvas; em breve) e ajustar à folha.
-            Row(horizontalArrangement = Arrangement.spacedBy(3.dp), verticalAlignment = Alignment.CenterVertically) {
-                ToolCell(selected = cameraActive, onClick = onCamera) { Icon(Icons.Default.Videocam, "Câmara", tint = it, modifier = Modifier.size(StudioDims.Icon)) }
-                ToolCell(onClick = onStudio) { Icon(Icons.Default.ShowChart, "Studio", tint = it, modifier = Modifier.size(StudioDims.Icon)) }
-                ToolCell(onClick = onFit) { Icon(Icons.Default.FitScreen, "Ajustar à folha", tint = it, modifier = Modifier.size(StudioDims.Icon)) }
-            }
-            // Cor (círculo): toque abre a roda de cores; arrastar para a folha pinta a região onde se solta. Onion ao lado.
-            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(3.dp)) {
-                CheckerBox(
-                    Color(st.colorArgb),
-                    Modifier.size(StudioDims.Cell).clip(CircleShape)
-                        .border(2.dp, StudioColors.Ink, CircleShape)
-                        .onGloballyPositioned { swatchRoot = it.positionInRoot() }
-                        .pointerInput(Unit) {
-                            var cur = Offset.Zero
-                            detectDragGestures(
-                                onDragStart = { o -> cur = swatchRoot + o; curSwDrag(cur) },
-                                onDragEnd = { curSwDrop(cur) },
-                                onDragCancel = { curSwCancel() },
-                            ) { change, d ->
-                                change.consume()
-                                cur += d
-                                curSwDrag(cur)
-                            }
-                        }
-                        .clickable { onColor(ColorMethod.DISC) }
-                )
-                Box(Modifier.size(width = 20.dp, height = StudioDims.Cell).clickable(onClick = onOnionOptions), contentAlignment = Alignment.Center) {
-                    DotsGlyph(StudioColors.InkDim)
-                }
-                val shape = RoundedCornerShape(9.dp)
-                Box(
-                    Modifier.height(StudioDims.Cell).clip(shape)
-                        .background(if (st.onionOn) StudioColors.Accent else StudioColors.Surface2)
-                        .border(1.dp, if (st.onionOn) StudioColors.Accent else StudioColors.Outline, shape)
-                        .clickable { st.onionOn = !st.onionOn }.padding(horizontal = 12.dp),
-                    contentAlignment = Alignment.Center,
-                ) { Text("Onion", style = StudioType.Label.copy(fontSize = 11.sp)) }
-            }
-            // Janela de referência: toque mostra ou esconde; toque longo troca a imagem.
-            ToolCell(selected = refActive, onLongClick = onReferenceLong, onClick = onReference) {
-                Icon(Icons.Default.Image, "Referência", tint = it, modifier = Modifier.size(StudioDims.Icon))
-            }
+        // Janela de referência: toque mostra ou esconde; toque longo troca a imagem.
+        ToolCell(selected = refActive, onLongClick = onReferenceLong, onClick = onReference) {
+            Icon(Icons.Default.Image, "Referência", tint = it, modifier = Modifier.size(StudioDims.Icon))
         }
     }
 }
