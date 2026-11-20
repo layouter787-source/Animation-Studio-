@@ -159,14 +159,15 @@ internal fun TopBar(
     cameraKeys: Set<Long> = emptySet(),
 ) {
     // A barra está dividida em três funções pequenas (esquerda, camadas e frames, direita): evita uma única função
-    // enorme com dezenas de nós aninhados.
+    // enorme com dezenas de nós aninhados. Flutua por cima do espaço de trabalho e ocupa só o que precisa.
     Row(
-        modifier.fillMaxWidth().background(StudioColors.Navy).padding(4.dp),
+        modifier.clip(RoundedCornerShape(14.dp)).background(StudioColors.Navy)
+            .border(1.dp, StudioColors.Outline, RoundedCornerShape(14.dp)).padding(4.dp),
         horizontalArrangement = Arrangement.spacedBy(4.dp),
         verticalAlignment = Alignment.Top,
     ) {
         TopBarLeft(onGripEnd, onMenu, onAdd)
-        TopBarLayers(st, sw, sh, expanded, onLayerOptions, onMoveLayer, onFrameOptions, cameraKeys, Modifier.weight(1f))
+        TopBarLayers(st, sw, sh, expanded, onLayerOptions, onMoveLayer, onFrameOptions, cameraKeys, Modifier.weight(1f, fill = false))
         TopBarRight(
             st, cameraActive, onCamera, onStudio, onFit, onColor, onOnionOptions, onReference, onReferenceLong, refActive,
             onSwatchDrag, onSwatchDrop, onSwatchCancel,
@@ -242,7 +243,7 @@ private fun TopBarLayers(
                 }
             }
         }
-        Box(Modifier.weight(1f).horizontalScroll(hScroll)) {
+        Box(Modifier.weight(1f, fill = false).horizontalScroll(hScroll)) {
             Column {
                 for (l in rows) {
                     FrameRow(st, l, sw, sh, cellW, cellH, rowH, cameraKeys, onFrameOptions)

@@ -30,6 +30,7 @@ import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
@@ -93,6 +94,7 @@ import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.layout.positionInRoot
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
@@ -291,10 +293,25 @@ fun AnimationEditor(meta: ProjectMeta, initial: Project, store: ProjectStore, on
     var cameraMode by remember { mutableStateOf(false) }
     var camView by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
+    val density = LocalDensity.current
+    val sideScroll = rememberScrollState()
     val sw = sheetW.toFloat()
     val sh = sheetH.toFloat()
     val curMeta = meta.copy(width = sheetW, height = sheetH)
     val baseName = remember(meta.name) { meta.name.replace(Regex("[^A-Za-z0-9_-]"), "_").ifBlank { "animacao" } }
+
+    /** Enquadra a folha na área livre (fora das barras flutuantes) do espaço de trabalho, que ocupa o ecrã todo. */
+    fun fitFree(w: Float, h: Float): ViewTransform {
+        val topPx = if (!st.timelineBottom) topBarHeightPx + with(density) { 8.dp.toPx() } else 0f
+        val botPx = if (st.timelineBottom) topBarHeightPx + with(density) { 8.dp.toPx() } else 0f
+        val sidePx = with(density) { (StudioDims.PanelWidth + 8.dp).toPx() }
+        val left = if (!st.toolsRight) sidePx else 0f
+        val right = if (st.toolsRight) sidePx else 0f
+        val fw = canvasSize.width - left - right
+        val fh = canvasSize.height - topPx - botPx
+        val v = ViewTransform.fitSheet(w, h, fw, fh, 8f)
+        return v.copy(tx = v.tx + left, ty = v.ty + topPx)
+    }
 
     fun toast(msg: String) = Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
     fun close() {
@@ -460,9 +477,9 @@ fun AnimationEditor(meta: ProjectMeta, initial: Project, store: ProjectStore, on
         persistCamera(store, meta.id, camera)
     }
 
-    LaunchedEffect(canvasSize) {
-        if (canvasSize.width > 0 && !st.fitted) {
-            st.view = ViewTransform.fitSheet(sw, sh, canvasSize.width.toFloat(), canvasSize.height.toFloat(), 4f)
+    LaunchedEffect(canvasSize, topBarHeightPx) {
+        if (canvasSize.width > 0 && topBarHeightPx > 0 && !st.fitted) {
+            st.view = fitFree(sw, sh)
             st.fitted = true
         }
     }
@@ -500,7 +517,7 @@ fun AnimationEditor(meta: ProjectMeta, initial: Project, store: ProjectStore, on
                 if (!cameraMode) camView = false
             },
             onStudio = { toast("Modo Studio: em breve") },
-            onFit = { st.view = ViewTransform.fitSheet(sw, sh, canvasSize.width.toFloat(), canvasSize.height.toFloat(), 4f) },
+            onFit = { st.view = fitFree(sw, sh) },
             onReference = { if (refImage == null) refLauncher.launch("image/*") else refVisible = !refVisible },
             onReferenceLong = { refLauncher.launch("image/*") },
             refActive = refImage != null && refVisible,
@@ -579,14 +596,14 @@ fun AnimationEditor(meta: ProjectMeta, initial: Project, store: ProjectStore, on
     val camKey = CameraMath.at(st.project.frameIds, camera, st.project.currentFrame.toFloat(), sw, sh)
     val previewMatrix = if ((camView || st.playing) && !camera.isEmpty) affineMatrix(camKey.outputAffine(sw, sh)) else null
 
-    Box(Modifier.fillMaxSize().background(StudioColors.Navy).onSizeChanged { rootSize = it }) {
-        Column(Modifier.fillMaxSize()) {
-            if (!st.timelineBottom) timelineBar()
-            Row(Modifier.weight(1f).fillMaxWidth()) {
-                if (!st.toolsRight) sideColumn()
+    // Altura ocupada por uma barra flutuante (com a margem), em dp: o resto do ecrã é espaço de trabalho.
+    val barDp = with(density) { topBarHeightPx.toDp() } + 8.dp
+    Box(Modifier.fillMaxSize().background(StudioColors.Workspace).onSizeChanged { rootSize = it }) {
+        run {
+            run {
                 Box(
-                    // Espaço de trabalho sem moldura nem margem: vai de borda a borda entre as barras e a folha move-se livremente.
-                    Modifier.weight(1f).fillMaxHeight().clipToBounds().background(StudioColors.Workspace)
+                    // Espaço de trabalho infinito: ocupa o ecrã todo e a folha flutua nele. As barras ficam por cima, fixas.
+                    Modifier.fillMaxSize().clipToBounds().background(StudioColors.Workspace)
                         .onSizeChanged { canvasSize = it }
                         .onGloballyPositioned { canvasRoot = it.positionInRoot() }
                 ) {
@@ -947,12 +964,12 @@ fun AnimationEditor(meta: ProjectMeta, initial: Project, store: ProjectStore, on
                             onDeleteKey = { camera = camera.withoutKey(st.project.currentFrameId) },
                             onToggleView = { camView = !camView },
                             onClose = { cameraMode = false; camView = false },
-                            modifier = Modifier.align(Alignment.TopCenter).padding(top = 8.dp),
+                            modifier = Modifier.align(Alignment.TopCenter).padding(top = 8.dp + (if (!st.timelineBottom) barDp else 0.dp)),
                         )
                     }
                     // Estado solto, sem cartão: só o zoom e os avisos de trabalho em curso.
                     Row(
-                        Modifier.align(Alignment.BottomCenter).padding(bottom = 8.dp),
+                        Modifier.align(Alignment.BottomCenter).padding(bottom = 8.dp + (if (st.timelineBottom) barDp else 0.dp)),
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
                     ) {
                         Text("${(st.view.scale * 100f).roundToInt()}%", style = StudioType.Number.copy(fontSize = 11.sp, color = Color.White.copy(alpha = 0.7f)))
@@ -960,19 +977,28 @@ fun AnimationEditor(meta: ProjectMeta, initial: Project, store: ProjectStore, on
                         if (st.busyLift) Text("A SELECIONAR…", style = StudioType.Caption.copy(fontSize = 9.sp, color = StudioColors.Accent))
                     }
                 }
-                if (st.toolsRight) sideColumn()
             }
-            if (st.timelineBottom) timelineBar()
+        }
+        // Barra da timeline: flutua por cima do espaço de trabalho, ocupa só o que precisa e a folha nunca a tapa.
+        Box(
+            Modifier.align(if (st.timelineBottom) Alignment.BottomCenter else Alignment.TopCenter).padding(4.dp)
+        ) { timelineBar() }
+        // Barra de ferramentas (ou painel da seleção): flutua ao lado, fora da barra da timeline.
+        Box(
+            Modifier.fillMaxSize().padding(top = if (!st.timelineBottom) barDp else 0.dp, bottom = if (st.timelineBottom) barDp else 0.dp),
+            contentAlignment = if (st.toolsRight) Alignment.CenterEnd else Alignment.CenterStart,
+        ) {
+            Box(Modifier.verticalScroll(sideScroll)) { sideColumn() }
         }
         if (st.timelineBottom) {
             ExpandTab(
                 expanded = expanded, atBottom = true, onSet = { expanded = it },
-                modifier = Modifier.align(Alignment.BottomCenter).offset { IntOffset(0, -topBarHeightPx) },
+                modifier = Modifier.align(Alignment.BottomCenter).offset { IntOffset(0, -(topBarHeightPx + 8.dp.roundToPx())) },
             )
         } else {
             ExpandTab(
                 expanded = expanded, atBottom = false, onSet = { expanded = it },
-                modifier = Modifier.align(Alignment.TopCenter).offset { IntOffset(0, topBarHeightPx) },
+                modifier = Modifier.align(Alignment.TopCenter).offset { IntOffset(0, topBarHeightPx + 8.dp.roundToPx()) },
             )
         }
         val ref = refImage
@@ -1110,7 +1136,7 @@ fun AnimationEditor(meta: ProjectMeta, initial: Project, store: ProjectStore, on
             onApply = { w, h ->
                 sheetW = w
                 sheetH = h
-                st.view = ViewTransform.fitSheet(w.toFloat(), h.toFloat(), canvasSize.width.toFloat(), canvasSize.height.toFloat(), 4f)
+                st.view = fitFree(w.toFloat(), h.toFloat())
                 dialog = null
             },
             onDismiss = { dialog = null },
