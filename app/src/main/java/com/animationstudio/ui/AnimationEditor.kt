@@ -107,7 +107,6 @@ import com.animationstudio.domain.BrushStroke
 import com.animationstudio.domain.CameraKey
 import com.animationstudio.domain.CameraMath
 import com.animationstudio.domain.CameraTrack
-import com.animationstudio.domain.Ease
 import com.animationstudio.domain.ImageData
 import com.animationstudio.domain.Lasso
 import com.animationstudio.domain.LayerKind
@@ -391,21 +390,21 @@ fun AnimationEditor(meta: ProjectMeta, initial: Project, store: ProjectStore, on
 
     val pngLauncher = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("image/png")) { uri ->
         if (uri != null) scope.launch {
-            val ok = Exporter.exportPng(context, uri, st.project, st.project.currentFrame, sheetW, sheetH)
+            val ok = Exporter.exportPng(context, uri, st.project, st.project.currentFrame, sheetW, sheetH, camera)
             toast(if (ok) "PNG exportado" else "Falha ao exportar o PNG")
         }
     }
     val zipLauncher = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/zip")) { uri ->
         if (uri != null) scope.launch {
             toast("A exportar…")
-            val ok = Exporter.exportZip(context, uri, st.project, sheetW, sheetH, baseName)
+            val ok = Exporter.exportZip(context, uri, st.project, sheetW, sheetH, baseName, camera)
             toast(if (ok) "ZIP exportado" else "Falha ao exportar o ZIP")
         }
     }
     val treeLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
         if (uri != null) scope.launch {
             toast("A exportar…")
-            val ok = Exporter.exportSequence(context, uri, st.project, sheetW, sheetH, baseName)
+            val ok = Exporter.exportSequence(context, uri, st.project, sheetW, sheetH, baseName, camera)
             toast(if (ok) "Sequência exportada" else "Falha ao exportar a sequência")
         }
     }
@@ -500,29 +499,21 @@ fun AnimationEditor(meta: ProjectMeta, initial: Project, store: ProjectStore, on
     val timelineBar: @Composable () -> Unit = {
         TopBar(
             st = st, sw = sheetW, sh = sheetH, expanded = expanded,
-            onAdd = { dialog = EditorDialog.AddLayer },
+            onMenu = { dialog = EditorDialog.Menu },
+            onLayerMenu = { dialog = EditorDialog.AddLayer },
             onCamera = {
                 st.commitFloating()
                 cameraMode = !cameraMode
                 if (!cameraMode) camView = false
             },
-            onStudio = { toast("Modo Studio: em breve") },
             onFit = { st.view = fitFree(sw, sh) },
-            onColor = { dialog = EditorDialog.ColorPicker(it) },
-            onOnionOptions = { dialog = EditorDialog.Onion },
+            onStudio = { toast("Modo Studio: em breve") },
+            onReference = { if (refImage == null) refLauncher.launch("image/*") else refVisible = !refVisible },
+            onReferenceLong = { refLauncher.launch("image/*") },
+            refActive = refImage != null && refVisible,
             onLayerOptions = { dialog = EditorDialog.LayerOptions(it.id) },
             onMoveLayer = { id, delta -> st.edit { p -> p.moveLayer(id, delta) } },
             onFrameOptions = { dialog = EditorDialog.FrameActions(it) },
-            onSwatchDrag = { dragPos = it },
-            onSwatchDrop = { p ->
-                dragPos = null
-                // Largar a cor sobre a folha pinta a região em que se largou (como no Procreate Dreams).
-                val local = Offset(p.x - canvasRoot.x, p.y - canvasRoot.y)
-                if (!cameraMode && local.x in 0f..canvasSize.width.toFloat() && local.y in 0f..canvasSize.height.toFloat()) {
-                    requestFill(st.view.screenToProject(Point(local.x, local.y)))
-                }
-            },
-            onSwatchCancel = { dragPos = null },
             modifier = Modifier.onSizeChanged { topBarHeightPx = it.height },
             cameraActive = cameraMode,
             cameraKeys = camera.keys.keys,
@@ -549,6 +540,17 @@ fun AnimationEditor(meta: ProjectMeta, initial: Project, store: ProjectStore, on
             },
             onAddFrame = { st.edit { p -> p.insertFrameAt(p.currentFrame + 1) } },
             onPlayLong = { dialog = EditorDialog.FpsEdit },
+            onColor = { dialog = EditorDialog.ColorPicker(it) },
+            onSwatchDrag = { dragPos = it },
+            onSwatchDrop = { p ->
+                dragPos = null
+                // Largar a cor sobre a folha pinta a região em que se largou (como no Procreate Dreams).
+                val local = Offset(p.x - canvasRoot.x, p.y - canvasRoot.y)
+                if (!cameraMode && local.x in 0f..canvasSize.width.toFloat() && local.y in 0f..canvasSize.height.toFloat()) {
+                    requestFill(st.view.screenToProject(Point(local.x, local.y)))
+                }
+            },
+            onSwatchCancel = { dragPos = null },
         )
     }
 
@@ -932,20 +934,14 @@ fun AnimationEditor(meta: ProjectMeta, initial: Project, store: ProjectStore, on
                             }
                         }
                     )
-                    // Câmara: painel por cima da folha. (Ajustar à folha e referência estão agora na barra de cima.)
+                    // Câmara: painel por cima da folha.
                     if (cameraMode) {
                         val curKey = camera.keys[st.project.currentFrameId]
                         CameraPanel(
                             hasKey = curKey != null,
                             zoomPercent = (camKey.zoom * 100f).roundToInt(),
-                            ease = curKey?.ease ?: Ease.SMOOTH,
                             viewThroughCamera = camView,
                             onAddKey = { camera = camera.withKey(st.project.currentFrameId, camera.keys[st.project.currentFrameId] ?: camKey) },
-                            onToggleEase = {
-                                val k = camera.keys[st.project.currentFrameId]
-                                if (k == null) toast("Crie primeiro um keyframe neste frame")
-                                else camera = camera.withKey(st.project.currentFrameId, k.copy(ease = if (k.ease == Ease.SMOOTH) Ease.LINEAR else Ease.SMOOTH))
-                            },
                             onDeleteKey = { camera = camera.withoutKey(st.project.currentFrameId) },
                             onToggleView = { camView = !camView },
                             onClose = { cameraMode = false; camView = false },
@@ -977,12 +973,12 @@ fun AnimationEditor(meta: ProjectMeta, initial: Project, store: ProjectStore, on
         }
         if (st.timelineBottom) {
             ExpandTab(
-                expanded = expanded, atBottom = true, onSet = { expanded = it }, onLongPress = { dialog = EditorDialog.Menu },
+                expanded = expanded, atBottom = true, onSet = { expanded = it },
                 modifier = Modifier.align(Alignment.BottomCenter).offset { IntOffset(0, -(topBarHeightPx + 8.dp.roundToPx())) },
             )
         } else {
             ExpandTab(
-                expanded = expanded, atBottom = false, onSet = { expanded = it }, onLongPress = { dialog = EditorDialog.Menu },
+                expanded = expanded, atBottom = false, onSet = { expanded = it },
                 modifier = Modifier.align(Alignment.TopCenter).offset { IntOffset(0, topBarHeightPx + 8.dp.roundToPx()) },
             )
         }
@@ -1014,9 +1010,6 @@ fun AnimationEditor(meta: ProjectMeta, initial: Project, store: ProjectStore, on
             onGrid = { dialog = EditorDialog.Grid },
             onResolution = { dialog = EditorDialog.Resolution },
             onOrganize = { dialog = EditorDialog.Organize },
-            referenceShown = refImage != null && refVisible,
-            onReference = { dialog = null; if (refImage == null) refLauncher.launch("image/*") else refVisible = !refVisible },
-            onReferenceChange = { dialog = null; refLauncher.launch("image/*") },
             onImportImage = { dialog = null; imageLauncher.launch("image/*") },
             onImportVideo = { dialog = null; videoLauncher.launch("video/*") },
             onExportVideo = { dialog = null; videoExportLauncher.launch("$baseName.mp4") },
@@ -1037,10 +1030,11 @@ fun AnimationEditor(meta: ProjectMeta, initial: Project, store: ProjectStore, on
             },
             onDismiss = { dialog = null },
         )
-        EditorDialog.AddLayer -> AddLayerDialog(
+        EditorDialog.AddLayer -> LayerMenuDialog(
             onLayer = { st.addLayer(LayerKind.DRAWING); dialog = null },
             onScenery = { st.addLayer(LayerKind.SCENERY); dialog = null },
             onDuplicate = { st.duplicateLayer(st.activeLayerId); dialog = null },
+            onOnion = { dialog = EditorDialog.Onion },
             onDismiss = { dialog = null },
         )
         is EditorDialog.LayerOptions -> {
