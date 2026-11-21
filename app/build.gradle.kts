@@ -102,11 +102,36 @@ val generateLauncherIcon by tasks.registering {
     }
 }
 
+// AnimBrush.zip na raiz do repositório: extrai para third_party/AnimBrush (sem a pasta de topo, se existir) quando
+// a pasta ainda não está lá. Corre antes da configuração do CMake e do copyAnimBrushPack.
+val extractAnimBrush by tasks.registering(Copy::class) {
+    val zip = rootProject.layout.projectDirectory.file("AnimBrush.zip").asFile
+    val target = rootProject.layout.projectDirectory.dir("third_party/AnimBrush").asFile
+    onlyIf { zip.exists() && !File(target, "include").exists() }
+    from({ zipTree(zip) })
+    into(target)
+    includeEmptyDirs = false
+    eachFile {
+        val parts = relativePath.segments
+        if (parts.size > 1 && parts[0] == "AnimBrush") {
+            relativePath = RelativePath(true, *parts.drop(1).toTypedArray())
+        }
+    }
+    exclude("**/__MACOSX/**", "**/.DS_Store")
+}
+
+tasks.configureEach {
+    if (name.startsWith("configureCMake") || name.startsWith("buildCMake") || name.startsWith("generateJsonModel")) {
+        dependsOn(extractAnimBrush)
+    }
+}
+
 // AnimBrush: só o pack de texturas vai para os assets (os PNG originais ficam de fora). Sem a pasta, não faz nada.
 val copyAnimBrushPack by tasks.registering(Copy::class) {
     val pack = rootProject.layout.projectDirectory.file("third_party/AnimBrush/assets/stamps.abpack").asFile
     from(pack)
     into(layout.buildDirectory.dir("generated/animbrush-assets"))
+    dependsOn(extractAnimBrush)
     onlyIf { pack.exists() }
 }
 
