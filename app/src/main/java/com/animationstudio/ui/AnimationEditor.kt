@@ -497,19 +497,9 @@ fun AnimationEditor(meta: ProjectMeta, initial: Project, store: ProjectStore, on
         }
     }
 
-    val onTimelineGrip: (Float, Float) -> Unit = { _, dy ->
-        if (dy > 40f) { st.timelineBottom = true; prefs.timelineBottom = true }
-        else if (dy < -40f) { st.timelineBottom = false; prefs.timelineBottom = false }
-    }
-    val onToolsGrip: (Float, Float) -> Unit = { dx, _ ->
-        if (dx > 40f) { st.toolsRight = true; prefs.toolsRight = true }
-        else if (dx < -40f) { st.toolsRight = false; prefs.toolsRight = false }
-    }
-
     val timelineBar: @Composable () -> Unit = {
         TopBar(
             st = st, sw = sheetW, sh = sheetH, expanded = expanded,
-            onMenu = { dialog = EditorDialog.Menu },
             onAdd = { dialog = EditorDialog.AddLayer },
             onCamera = {
                 st.commitFloating()
@@ -518,15 +508,11 @@ fun AnimationEditor(meta: ProjectMeta, initial: Project, store: ProjectStore, on
             },
             onStudio = { toast("Modo Studio: em breve") },
             onFit = { st.view = fitFree(sw, sh) },
-            onReference = { if (refImage == null) refLauncher.launch("image/*") else refVisible = !refVisible },
-            onReferenceLong = { refLauncher.launch("image/*") },
-            refActive = refImage != null && refVisible,
             onColor = { dialog = EditorDialog.ColorPicker(it) },
             onOnionOptions = { dialog = EditorDialog.Onion },
             onLayerOptions = { dialog = EditorDialog.LayerOptions(it.id) },
             onMoveLayer = { id, delta -> st.edit { p -> p.moveLayer(id, delta) } },
             onFrameOptions = { dialog = EditorDialog.FrameActions(it) },
-            onGripEnd = onTimelineGrip,
             onSwatchDrag = { dragPos = it },
             onSwatchDrop = { p ->
                 dragPos = null
@@ -563,7 +549,6 @@ fun AnimationEditor(meta: ProjectMeta, initial: Project, store: ProjectStore, on
             },
             onAddFrame = { st.edit { p -> p.insertFrameAt(p.currentFrame + 1) } },
             onPlayLong = { dialog = EditorDialog.FpsEdit },
-            onGripEnd = onToolsGrip,
         )
     }
 
@@ -992,12 +977,12 @@ fun AnimationEditor(meta: ProjectMeta, initial: Project, store: ProjectStore, on
         }
         if (st.timelineBottom) {
             ExpandTab(
-                expanded = expanded, atBottom = true, onSet = { expanded = it },
+                expanded = expanded, atBottom = true, onSet = { expanded = it }, onLongPress = { dialog = EditorDialog.Menu },
                 modifier = Modifier.align(Alignment.BottomCenter).offset { IntOffset(0, -(topBarHeightPx + 8.dp.roundToPx())) },
             )
         } else {
             ExpandTab(
-                expanded = expanded, atBottom = false, onSet = { expanded = it },
+                expanded = expanded, atBottom = false, onSet = { expanded = it }, onLongPress = { dialog = EditorDialog.Menu },
                 modifier = Modifier.align(Alignment.TopCenter).offset { IntOffset(0, topBarHeightPx + 8.dp.roundToPx()) },
             )
         }
@@ -1029,6 +1014,9 @@ fun AnimationEditor(meta: ProjectMeta, initial: Project, store: ProjectStore, on
             onGrid = { dialog = EditorDialog.Grid },
             onResolution = { dialog = EditorDialog.Resolution },
             onOrganize = { dialog = EditorDialog.Organize },
+            referenceShown = refImage != null && refVisible,
+            onReference = { dialog = null; if (refImage == null) refLauncher.launch("image/*") else refVisible = !refVisible },
+            onReferenceChange = { dialog = null; refLauncher.launch("image/*") },
             onImportImage = { dialog = null; imageLauncher.launch("image/*") },
             onImportVideo = { dialog = null; videoLauncher.launch("video/*") },
             onExportVideo = { dialog = null; videoExportLauncher.launch("$baseName.mp4") },
