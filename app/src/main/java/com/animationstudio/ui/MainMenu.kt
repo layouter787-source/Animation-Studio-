@@ -54,9 +54,6 @@ internal fun MainMenu(
     onGrid: () -> Unit,
     onResolution: () -> Unit,
     onOrganize: () -> Unit,
-    referenceShown: Boolean,
-    onReference: () -> Unit,
-    onReferenceChange: () -> Unit,
     onImportImage: () -> Unit,
     onImportVideo: () -> Unit,
     onExportVideo: () -> Unit,
@@ -79,8 +76,6 @@ internal fun MainMenu(
                 MmRow("Grade", trailing = { PaletteGlyph(StudioColors.InkDim, Modifier.size(16.dp)) }) { onGrid() }
                 MmRow("Definições de resolução") { onResolution() }
                 MmRow("Organização da interface") { onOrganize() }
-                MmRow(if (referenceShown) "Esconder imagem de referência" else "Imagem de referência") { onReference() }
-                MmRow("Trocar imagem de referência") { onReferenceChange() }
                 MmSection("IMPORTAR")
                 MmRow("Importar imagem (para o frame atual)") { onImportImage() }
                 MmRow("Importar vídeo (um frame por imagem)") { onImportVideo() }
