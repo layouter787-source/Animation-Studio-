@@ -44,7 +44,7 @@ Estados: `PENDENTE`, `EM IMPLEMENTAÇÃO`, `IMPLEMENTADO`, `TESTADO`, `BLOQUEADO
 | REQ-VIEWER-01 | Visualizador de frames / Flipbook | PENDENTE | — | |
 | REQ-IO-01 | Importar imagem/vídeo; exportar MP4/PNG/sequência/ZIP | PENDENTE | — | |
 | REQ-KEY-01 | Keyframes, biblioteca de substituições | PENDENTE | — | |
-| REQ-BRUSH-01 | Biblioteca de pincéis (libmypaint) | PENDENTE | — | Ver licenças |
+| REQ-BRUSH-01 | Biblioteca de pincéis (AnimBrush) | EM IMPLEMENTAÇÃO | `app/src/main/cpp/animbrush_*`, `ui/AnimBrushes.kt` | Ver docs/ANIMBRUSH.md; compila, não testado em dispositivo |
 
 ## Fluxo descrito pelo autor (a implementar)
 
@@ -63,14 +63,13 @@ Estados: `PENDENTE`, `EM IMPLEMENTAÇÃO`, `IMPLEMENTADO`, `TESTADO`, `BLOQUEADO
 | Componente | Licença | Estado |
 |---|---|---|
 | JUnit 4.13.2 | EPL-1.0 | Em uso (só testes) |
-| libmypaint | ISC (confirmar no ficheiro COPYING do commit fixado) | Não integrado |
-| mypaint-brushes (ficheiros `.myb`) | CC0 para os pincéis; scripts GPL-2+ não copiar | Não integrado |
+| AnimBrush | Código próprio do projeto | `third_party/AnimBrush` (ver docs/ANIMBRUSH.md) |
 | OpenToonz | Modified BSD na maioria; terceiros/pincéis à parte | Só referência de comportamento, sem código copiado |
 
 ## Níveis de evidência
 
 1. Código escrito → 2. Compila no CI → 3. Testes unitários verdes no CI → 4. Validado em emulador/dispositivo. Os itens de domínio estão no nível 3; a UI está no nível 2.
 
-## libmypaint e pincéis (ver docs/LIBMYPAINT.md)
-- libmypaint (ISC): https://github.com/mypaint/libmypaint, commit `d5a88fb`, obtido no build.
-- mypaint-brushes (CC0): definições de pincel em `assets/mypaint_brushes.txt`.
+## Pincéis
+- AnimBrush (biblioteca própria) substitui o libmypaint, que foi removido (ver docs/ANIMBRUSH.md).
+- Pincel PNG importado: a imagem é a ponta, carimbada ao longo do traço sem esticar (`ui/PngTipStamps.kt`).
