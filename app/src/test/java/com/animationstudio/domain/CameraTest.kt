@@ -10,8 +10,8 @@ class CameraTest {
 
     @Test fun interpolatesBetweenKeysByFrame() {
         val t = CameraTrack()
-            .withKey(10L, CameraKey(100f, 100f, 1f, 0f, Ease.LINEAR))
-            .withKey(40L, CameraKey(400f, 100f, 4f, 1.5f, Ease.LINEAR))
+            .withKey(10L, CameraKey(100f, 100f, 1f, 0f))
+            .withKey(40L, CameraKey(400f, 100f, 4f, 1.5f))
         val mid = CameraMath.at(ids, t, 1.5f, 800f, 600f)
         assertEquals(250f, mid.cx, tol)
         assertEquals(2f, mid.zoom, tol)
@@ -23,9 +23,9 @@ class CameraTest {
         assertEquals(300f, none.cy, tol)
     }
 
-    @Test fun smoothEasingStartsSlowly() {
-        val t = CameraTrack().withKey(10L, CameraKey(0f, 0f, 1f, 0f, Ease.SMOOTH)).withKey(40L, CameraKey(300f, 0f, 1f, 0f))
-        assertTrue(CameraMath.at(ids, t, 0.5f, 800f, 600f).cx < 40f)
+    @Test fun interpolationIsLinear() {
+        val t = CameraTrack().withKey(10L, CameraKey(0f, 0f, 1f, 0f)).withKey(40L, CameraKey(300f, 0f, 1f, 0f))
+        assertEquals(50f, CameraMath.at(ids, t, 0.5f, 800f, 600f).cx, tol)
         assertEquals(150f, CameraMath.at(ids, t, 1.5f, 800f, 600f).cx, tol)
     }
 
