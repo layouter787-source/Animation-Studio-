@@ -2,11 +2,10 @@ package com.animationstudio.data
 
 import com.animationstudio.domain.CameraKey
 import com.animationstudio.domain.CameraTrack
-import com.animationstudio.domain.Ease
 import org.json.JSONArray
 import org.json.JSONObject
 
-/** Keyframes da câmara num ficheiro à parte (não altera o formato do projeto). */
+/** Keyframes da câmara num ficheiro à parte (não altera o formato do projeto). Ficheiros antigos com o campo "e" ainda abrem. */
 object CameraJson {
     fun encode(t: CameraTrack): String {
         val root = JSONObject()
@@ -18,7 +17,6 @@ object CameraJson {
             o.put("y", k.cy.toDouble())
             o.put("z", k.zoom.toDouble())
             o.put("r", k.rotation.toDouble())
-            o.put("e", if (k.ease == Ease.LINEAR) 0 else 1)
             cam.put(o)
         }
         root.put("cam", cam)
@@ -32,7 +30,7 @@ object CameraJson {
             val o = ca.getJSONObject(i)
             keys[o.getLong("f")] = CameraKey(
                 o.getDouble("x").toFloat(), o.getDouble("y").toFloat(), o.getDouble("z").toFloat(),
-                o.getDouble("r").toFloat(), if (o.getInt("e") == 0) Ease.LINEAR else Ease.SMOOTH,
+                o.getDouble("r").toFloat(),
             )
         }
         CameraTrack(keys)

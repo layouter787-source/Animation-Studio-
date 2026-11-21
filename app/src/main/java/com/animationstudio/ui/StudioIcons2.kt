@@ -85,8 +85,7 @@ internal fun FrameActionGlyph(tint: Color, toRight: Boolean, paste: Boolean, mod
 // ---------------------------------------------------------------------------------------------
 
 internal enum class GridType(val label: String) {
-    NONE("Nenhuma"), GRID("Grade"), ONE("Perspetiva 1 ponto de fuga"), TWO("Perspetiva 2 pontos de fuga"),
-    THREE("Perspetiva 3 pontos de fuga"), FISHEYE("Olho de peixe"),
+    NONE("Nenhuma"), GRID("Grade"), ONE("Perspetiva 1 ponto de fuga"),
 }
 
 private fun DrawScope.rays(vp: Offset, n: Int, color: Color, lineW: Float, far: Float) {
@@ -111,27 +110,6 @@ internal fun DrawScope.drawGridOverlay(type: GridType, cell: Float, sw: Float, s
             val vp = Offset(sw / 2f, sh * 0.42f)
             drawLine(color, Offset(0f, vp.y), Offset(sw, vp.y), lineW * 1.5f)
             rays(vp, 28, color, lineW, far)
-        }
-        GridType.TWO -> {
-            val y = sh * 0.5f
-            drawLine(color, Offset(0f, y), Offset(sw, y), lineW * 1.5f)
-            rays(Offset(-sw * 0.35f, y), 18, color, lineW, far)
-            rays(Offset(sw * 1.35f, y), 18, color, lineW, far)
-            var x = cell
-            while (x < sw) { drawLine(color.copy(alpha = color.alpha * 0.6f), Offset(x, 0f), Offset(x, sh), lineW); x += cell }
-        }
-        GridType.THREE -> {
-            val y = sh * 0.55f
-            drawLine(color, Offset(0f, y), Offset(sw, y), lineW * 1.5f)
-            rays(Offset(-sw * 0.3f, y), 14, color, lineW, far)
-            rays(Offset(sw * 1.3f, y), 14, color, lineW, far)
-            rays(Offset(sw / 2f, -sh * 1.1f), 14, color, lineW, far)
-        }
-        GridType.FISHEYE -> {
-            val c = Offset(sw / 2f, sh / 2f)
-            rays(c, 24, color, lineW, far)
-            val step = sh / 6f
-            for (k in 1..8) drawCircle(color, step * k, c, style = Stroke(width = lineW))
         }
     }
 }

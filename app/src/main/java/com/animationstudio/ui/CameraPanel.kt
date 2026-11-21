@@ -21,7 +21,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
-import com.animationstudio.domain.Ease
 
 @Composable
 private fun CamChip(modifier: Modifier = Modifier, selected: Boolean = false, onClick: () -> Unit, content: @Composable (Color) -> Unit) {
@@ -37,17 +36,15 @@ private fun CamChip(modifier: Modifier = Modifier, selected: Boolean = false, on
 
 /**
  * Painel do modo câmara, no estilo do Rough Animator: a câmara é um enquadramento que se move e se amplia sobre a
- * folha; cada frame pode ter um keyframe e entre keyframes a câmara interpola. Um dedo move, dois dedos
+ * folha; cada frame pode ter um keyframe e entre keyframes a câmara interpola em linha reta. Um dedo move, dois dedos
  * ampliam e rodam; mover cria ou atualiza o keyframe do frame atual, e "+" cria-o sem mexer.
  */
 @Composable
 internal fun CameraPanel(
     hasKey: Boolean,
     zoomPercent: Int,
-    ease: Ease,
     viewThroughCamera: Boolean,
     onAddKey: () -> Unit,
-    onToggleEase: () -> Unit,
     onDeleteKey: () -> Unit,
     onToggleView: () -> Unit,
     onClose: () -> Unit,
@@ -58,9 +55,6 @@ internal fun CameraPanel(
             Text("$zoomPercent%", style = StudioType.Number.copy(fontSize = 13.sp, color = if (hasKey) StudioColors.Amber else StudioColors.Ink))
         }
         CamChip(selected = hasKey, onClick = onAddKey) { Icon(Icons.Default.Add, "Criar keyframe", tint = it, modifier = Modifier.size(20.dp)) }
-        CamChip(selected = ease == Ease.SMOOTH, onClick = onToggleEase) {
-            Text(if (ease == Ease.SMOOTH) "Suave" else "Linear", style = StudioType.Label.copy(fontSize = 9.sp, color = it))
-        }
         CamChip(onClick = onDeleteKey) { Icon(Icons.Default.Delete, "Apagar keyframe", tint = if (hasKey) StudioColors.Danger else StudioColors.InkDim, modifier = Modifier.size(18.dp)) }
         CamChip(selected = viewThroughCamera, onClick = onToggleView) { Icon(Icons.Default.Visibility, "Ver pela câmara", tint = it, modifier = Modifier.size(18.dp)) }
         CamChip(selected = true, onClick = onClose) { Icon(Icons.Default.Check, "Concluir", tint = Color.White, modifier = Modifier.size(18.dp)) }

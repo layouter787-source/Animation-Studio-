@@ -2,15 +2,12 @@ package com.animationstudio.domain
 
 import kotlin.math.pow
 
-/** Interpolação entre keyframes da câmara: LINEAR ou SMOOTH (começa e acaba devagar). */
-enum class Ease { LINEAR, SMOOTH }
-
 /**
  * Estado da câmara num keyframe. [cx], [cy] = centro (coordenadas da folha), [zoom] = ampliação (1 = vê a folha
  * inteira; 1,35 = 135%), [rotation] = rotação do enquadramento em radianos (horária).
- * [ease] aplica-se ao troco que começa neste keyframe.
+ * Entre dois keyframes a câmara interpola em linha reta (o zoom de forma proporcional).
  */
-data class CameraKey(val cx: Float, val cy: Float, val zoom: Float, val rotation: Float, val ease: Ease = Ease.SMOOTH) {
+data class CameraKey(val cx: Float, val cy: Float, val zoom: Float, val rotation: Float) {
     /** Transformação folha → imagem de saída (do tamanho da folha): o centro da câmara vai para o meio da saída. */
     fun outputAffine(sw: Float, sh: Float): Affine {
         val toOrigin = Affine.translate(-cx, -cy)
@@ -63,10 +60,9 @@ object CameraMath {
             val (t1, k1) = keys[i + 1]
             if (position >= t0 && position <= t1) {
                 val u = if (t1 == t0) 1f else (position - t0) / (t1 - t0).toFloat()
-                val e = if (k0.ease == Ease.SMOOTH) u * u * (3f - 2f * u) else u
                 return CameraKey(
-                    lerp(k0.cx, k1.cx, e), lerp(k0.cy, k1.cy, e),
-                    k0.zoom * (k1.zoom / k0.zoom).pow(e), lerp(k0.rotation, k1.rotation, e), k0.ease,
+                    lerp(k0.cx, k1.cx, u), lerp(k0.cy, k1.cy, u),
+                    k0.zoom * (k1.zoom / k0.zoom).pow(u), lerp(k0.rotation, k1.rotation, u),
                 )
             }
         }
