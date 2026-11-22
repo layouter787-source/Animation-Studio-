@@ -13,8 +13,6 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -23,7 +21,6 @@ import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -33,7 +30,6 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Brush
 import androidx.compose.material.icons.filled.FitScreen
 import androidx.compose.material.icons.filled.Image
-import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Movie
 import androidx.compose.material.icons.filled.Pause
@@ -54,10 +50,15 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.drawscope.withTransform
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.onSizeChanged
@@ -74,9 +75,9 @@ import com.animationstudio.domain.holdEnd
 import com.animationstudio.domain.shrinkHold
 
 /** Barra flutuante do estúdio: fundo azul escuro, contorno com brilho azul e cantos arredondados. */
-internal fun Modifier.studioGlow(radius: Dp = 16.dp): Modifier {
+internal fun Modifier.studioGlow(radius: Dp = 14.dp): Modifier {
     val shape = RoundedCornerShape(radius)
-    return this.shadow(10.dp, shape, ambientColor = StudioColors.Accent, spotColor = StudioColors.Accent)
+    return this.shadow(8.dp, shape, ambientColor = StudioColors.Accent, spotColor = StudioColors.Accent)
         .clip(shape).background(StudioColors.Navy)
         .border(
             1.dp,
@@ -91,10 +92,7 @@ internal fun Modifier.studioCard(radius: Dp = 14.dp): Modifier {
     return this.clip(shape).background(StudioColors.Surface).border(1.dp, StudioColors.Outline, shape)
 }
 
-/**
- * Estende ([steps] > 0) ou encurta ([steps] < 0) a duração do frame atual: frames que partilham o mesmo desenho.
- * Cada passo é um passo no histórico (desfazer volta um frame).
- */
+/** Estende ([steps] > 0) ou encurta ([steps] < 0) a duração do frame atual. */
 private fun EditorState.holdSteps(steps: Int) {
     if (playing || steps == 0) return
     edit { p -> if (steps > 0) p.extendHold(p.currentFrame, steps) else p.shrinkHold(p.currentFrame, -steps) }
@@ -113,7 +111,7 @@ internal fun ToolCell(
     content: @Composable (Color) -> Unit,
 ) {
     val tint = if (selected) Color.White else if (enabled) StudioColors.Ink else StudioColors.InkDim.copy(alpha = 0.5f)
-    val shape = RoundedCornerShape(9.dp)
+    val shape = RoundedCornerShape(8.dp)
     Box(
         modifier.size(width = width, height = height).clip(shape)
             .background(if (selected) StudioColors.Accent else StudioColors.Surface2)
@@ -123,15 +121,13 @@ internal fun ToolCell(
     ) { content(tint) }
 }
 
-
 // ---------------------------------------------------------------------------------------------
-// Barra da timeline, como no esboço (da esquerda para a direita):
+// Interface de telemóvel. Barra da timeline (esquerda para a direita):
 //   menu e ⋮ | nomes das camadas | frames (a barra estica com eles) | câmara e ajustar / Studio e referência
-// Todos os controlos têm a mesma altura (StudioDims.Cell) e todos os ícones o mesmo tamanho (StudioDims.Icon).
 // ---------------------------------------------------------------------------------------------
 
-private val NameW = 116.dp
-private val FrameW = 46.dp
+private val NameW = 92.dp
+private val FrameW = 38.dp
 
 @Composable
 internal fun TopBar(
@@ -151,25 +147,21 @@ internal fun TopBar(
     onMoveLayer: (Long, Int) -> Unit,
     onFrameOptions: (Int) -> Unit,
     modifier: Modifier = Modifier,
-    /** Modo câmara ligado (realça o botão da câmara). */
     cameraActive: Boolean = false,
-    /** Ids dos frames que têm keyframe de câmara (marcados com um losango âmbar). */
     cameraKeys: Set<Long> = emptySet(),
 ) {
     val gap = StudioDims.Gap
     Row(
-        modifier.studioGlow(16.dp).padding(5.dp),
+        modifier.studioGlow(14.dp).padding(4.dp),
         horizontalArrangement = Arrangement.spacedBy(gap),
         verticalAlignment = Alignment.Top,
     ) {
-        // Esquerda: menu principal (≡) e, por baixo, camada, cenário e onion (⋮).
+        // Esquerda: menu principal e, por baixo, camada, cenário e onion (⋮).
         Column(verticalArrangement = Arrangement.spacedBy(gap)) {
-            ToolCell(onClick = onMenu) { Icon(Icons.Default.Menu, "Menu", tint = it, modifier = Modifier.size(StudioDims.Icon)) }
+            ToolCell(onClick = onMenu) { MenuGlyph(it, Modifier.size(StudioDims.Icon)) }
             ToolCell(onClick = onLayerMenu) { Icon(Icons.Default.MoreVert, "Camada, cenário e onion", tint = it, modifier = Modifier.size(StudioDims.Icon)) }
         }
-        // A janela de frames ocupa o que precisa: a barra estica com os frames até à largura do ecrã e depois desloca-se.
         TopBarLayers(st, sw, sh, expanded, onLayerOptions, onMoveLayer, onFrameOptions, cameraKeys, Modifier.weight(1f, fill = false))
-        // Direita: câmara e ajustar à folha; Studio (em breve) e imagem de referência.
         Column(verticalArrangement = Arrangement.spacedBy(gap)) {
             Row(horizontalArrangement = Arrangement.spacedBy(gap)) {
                 ToolCell(selected = cameraActive, onClick = onCamera) { Icon(Icons.Default.Videocam, "Câmara", tint = it, modifier = Modifier.size(StudioDims.Icon)) }
@@ -198,7 +190,6 @@ private fun TopBarLayers(
     modifier: Modifier,
 ) {
     val all = st.project.layers.asReversed()
-    // Fechada mostra as duas camadas de cima (camada e cenário); aberta (pílula) mostra todas.
     val rows = if (expanded) all else all.take(2)
     val cellH = StudioDims.Cell
     val gap = StudioDims.Gap
@@ -212,7 +203,6 @@ private fun TopBarLayers(
     val step = FrameW + 3.dp
     val stepPx = with(LocalDensity.current) { step.toPx() }
     var viewport by remember { mutableIntStateOf(0) }
-    // Quando os frames já não cabem, a janela desloca-se para o frame atual ficar sempre à vista.
     LaunchedEffect(curFrame, frameCount, viewport) {
         val left = curFrame * stepPx
         val right = left + stepPx
@@ -227,8 +217,7 @@ private fun TopBarLayers(
         Column(Modifier.width(NameW), verticalArrangement = Arrangement.spacedBy(gap)) {
             for (l in rows) {
                 val isActive = l.id == st.activeLayerId
-                val shape = RoundedCornerShape(9.dp)
-                // A camada ativa distingue-se pelo contorno. Tocar numa camada já ativa abre as opções dela.
+                val shape = RoundedCornerShape(8.dp)
                 Row(
                     Modifier.height(cellH).fillMaxWidth().clip(shape)
                         .background(if (isActive) StudioColors.AccentSoft else StudioColors.Surface2)
@@ -242,11 +231,11 @@ private fun TopBarLayers(
                             }
                         }
                         .clickable { if (isActive) onLayerOptions(l) else st.activeLayerId = l.id }
-                        .padding(horizontal = 10.dp),
+                        .padding(horizontal = 8.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Text(
-                        l.name, style = StudioType.Label.copy(fontSize = 13.sp), maxLines = 1, overflow = TextOverflow.Ellipsis,
+                        l.name, style = StudioType.Label.copy(fontSize = 11.sp), maxLines = 1, overflow = TextOverflow.Ellipsis,
                         textDecoration = if (l.visible) TextDecoration.None else TextDecoration.LineThrough,
                     )
                 }
@@ -256,15 +245,13 @@ private fun TopBarLayers(
             Column(verticalArrangement = Arrangement.spacedBy(gap)) {
                 for (l in rows) FrameRow(st, l, sw, sh, cellH, cameraKeys, onFrameOptions)
             }
-            // Pega de duração: no fim da exposição do frame atual. Arrastar para a direita estende a duração
-            // (frames que partilham o desenho); para a esquerda encurta.
             if (!st.playing) {
                 val proj = st.project
                 val endIdx = proj.holdEnd(proj.currentFrame)
                 val activeRow = rows.indexOfFirst { it.id == st.activeLayerId }.coerceAtLeast(0)
                 Box(
-                    Modifier.offset(x = step * (endIdx + 1) - 12.dp, y = rowH * activeRow)
-                        .size(width = 10.dp, height = cellH).clip(RoundedCornerShape(5.dp)).background(StudioColors.Accent)
+                    Modifier.offset(x = step * (endIdx + 1) - 10.dp, y = rowH * activeRow)
+                        .size(width = 8.dp, height = cellH).clip(RoundedCornerShape(4.dp)).background(StudioColors.Accent)
                         .pointerInput(stepPx) {
                             var acc = 0f
                             detectHorizontalDragGestures(onDragStart = { acc = 0f }) { change, dx ->
@@ -283,7 +270,6 @@ private fun TopBarLayers(
     }
 }
 
-/** Uma linha de frames (uma camada): células com miniatura e número, todas com a mesma altura. */
 @Composable
 private fun FrameRow(
     st: EditorState,
@@ -298,8 +284,7 @@ private fun FrameRow(
         st.project.frameIds.forEachIndexed { i, fid ->
             val strokes = l.drawingAt(fid)?.strokes
             val isCurrent = i == st.project.currentFrame
-            val shape = RoundedCornerShape(9.dp)
-            // Tocar num frame que já está selecionado (na mesma camada) abre as opções do frame.
+            val shape = RoundedCornerShape(8.dp)
             Box(
                 Modifier.padding(horizontal = 1.5.dp).size(width = FrameW, height = cellH).clip(shape)
                     .background(if (strokes != null) Color.White else StudioColors.Surface2)
@@ -319,15 +304,15 @@ private fun FrameRow(
                 Text(
                     "${i + 1}",
                     style = StudioType.Label.copy(
-                        fontSize = 13.sp,
+                        fontSize = 11.sp,
                         color = if (strokes != null) Color(0xFF30384F) else StudioColors.Ink,
                     ),
-                    modifier = Modifier.align(Alignment.CenterStart).padding(start = 9.dp),
+                    modifier = Modifier.align(Alignment.CenterStart).padding(start = 7.dp),
                 )
                 if (fid in cameraKeys) {
                     Box(
-                        Modifier.align(Alignment.BottomStart).padding(start = 5.dp, bottom = 3.dp)
-                            .size(6.dp).rotate(45f).background(StudioColors.Amber)
+                        Modifier.align(Alignment.BottomStart).padding(start = 4.dp, bottom = 3.dp)
+                            .size(5.dp).rotate(45f).background(StudioColors.Amber)
                     )
                 }
             }
@@ -360,7 +345,10 @@ private fun LayerMenuLine(text: String, onClick: () -> Unit) {
     ) { Text(text, style = StudioType.Body.copy(fontSize = 13.sp)) }
 }
 
-/** Pílula por baixo (ou por cima) da barra: arrastar ou tocar abre/fecha a lista completa de camadas. */
+/**
+ * Pega da timeline: uma aba pequena colada à barra (sem folga), com o lado da barra reto e os outros cantos redondos.
+ * Tocar ou arrastar abre/fecha a lista completa de camadas.
+ */
 @Composable
 internal fun ExpandTab(
     expanded: Boolean,
@@ -370,27 +358,42 @@ internal fun ExpandTab(
 ) {
     val curExpanded by rememberUpdatedState(expanded)
     val curSet by rememberUpdatedState(onSet)
-    val shape = RoundedCornerShape(12.dp)
+    val r = 8.dp
+    val shape = if (atBottom) RoundedCornerShape(topStart = r, topEnd = r) else RoundedCornerShape(bottomStart = r, bottomEnd = r)
+    val line = StudioColors.Outline
     Box(
-        modifier.width(120.dp).height(24.dp).clip(shape).background(StudioColors.Navy).border(1.dp, StudioColors.Outline, shape)
+        modifier.size(width = 50.dp, height = 14.dp).clip(shape).background(StudioColors.Navy)
+            .drawBehind {
+                val rp = r.toPx()
+                val w = size.width
+                val h = size.height
+                val p = Path()
+                p.moveTo(0f, h)
+                p.lineTo(0f, rp)
+                p.arcTo(Rect(0f, 0f, 2 * rp, 2 * rp), 180f, 90f, false)
+                p.lineTo(w - rp, 0f)
+                p.arcTo(Rect(w - 2 * rp, 0f, w, 2 * rp), 270f, 90f, false)
+                p.lineTo(w, h)
+                withTransform({ if (!atBottom) scale(1f, -1f, Offset(w / 2f, h / 2f)) }) {
+                    drawPath(p, line, style = Stroke(1.dp.toPx()))
+                }
+            }
             .pointerInput(atBottom) {
                 detectVerticalDragGestures { change, dy ->
                     change.consume()
-                    val expand = if (atBottom) dy < -4f else dy > 4f
-                    val collapse = if (atBottom) dy > 4f else dy < -4f
+                    val expand = if (atBottom) dy < -3f else dy > 3f
+                    val collapse = if (atBottom) dy > 3f else dy < -3f
                     if (expand) curSet(true) else if (collapse) curSet(false)
                 }
             }
             .clickable { curSet(!curExpanded) },
         contentAlignment = Alignment.Center,
     ) {
-        Box(Modifier.width(36.dp).height(4.dp).clip(RoundedCornerShape(2.dp)).background(Color(0xFF6E96FF)))
+        Box(Modifier.size(width = 20.dp, height = 3.dp).clip(RoundedCornerShape(2.dp)).background(Color(0xFF6E96FF)))
     }
 }
 
-/**
- * Amostra de cor (círculo): toque abre a roda de cores; arrastar para a folha pinta a região onde se solta.
- */
+/** Amostra de cor (círculo): toque abre a roda de cores; arrastar para a folha pinta a região onde se solta. */
 @Composable
 private fun ColorSwatch(
     st: EditorState,
@@ -424,11 +427,6 @@ private fun ColorSwatch(
     )
 }
 
-// ---------------------------------------------------------------------------------------------
-// Painel de ferramentas (grelha de 2 colunas), como no esboço:
-//   cor | pincel, borracha | laço, novo frame | desfazer, refazer | reproduzir | frame anterior, seguinte
-// ---------------------------------------------------------------------------------------------
-
 @Composable
 internal fun ToolPanel(
     st: EditorState,
@@ -443,10 +441,9 @@ internal fun ToolPanel(
     onSwatchCancel: () -> Unit,
 ) {
     val gap = StudioDims.Gap
-    // A margem de fora deixa espaço ao brilho do contorno, que o contentor da barra cortaria.
-    Column(Modifier.padding(8.dp)) {
+    Column(Modifier.padding(6.dp)) {
         Column(
-            Modifier.studioGlow(16.dp).padding(5.dp),
+            Modifier.studioGlow(14.dp).padding(4.dp),
             verticalArrangement = Arrangement.spacedBy(gap),
         ) {
             Box(Modifier.size(width = StudioDims.Cell * 2 + gap, height = StudioDims.Cell), contentAlignment = Alignment.Center) {
@@ -470,7 +467,6 @@ internal fun ToolPanel(
                 ToolCell(enabled = st.history.canUndo && !st.playing, onClick = { st.undo() }) { Icon(Icons.Default.Undo, "Desfazer", tint = it, modifier = Modifier.size(StudioDims.Icon)) }
                 ToolCell(enabled = st.history.canRedo && !st.playing, onClick = { st.redo() }) { Icon(Icons.Default.Redo, "Refazer", tint = it, modifier = Modifier.size(StudioDims.Icon)) }
             }
-            // Reproduzir (toque longo: FPS e modo de reprodução).
             ToolCell(width = StudioDims.Cell * 2 + gap, selected = st.playing, onLongClick = onPlayLong, onClick = { st.togglePlay() }) {
                 Icon(if (st.playing) Icons.Default.Pause else Icons.Default.PlayArrow, if (st.playing) "Parar" else "Reproduzir", tint = it, modifier = Modifier.size(StudioDims.Icon))
             }

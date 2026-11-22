@@ -75,16 +75,14 @@ import com.animationstudio.domain.insertFrameAt
 import com.animationstudio.domain.shrinkHold
 
 // ---------------------------------------------------------------------------------------------
-// Interface v2 (esboço 3): barra única em baixo, com cantos arredondados.
+// Interface de tablet (esboço 3): barra única em baixo, com cantos arredondados.
 //   Linha 1: CAMADAS + | FRAME x/y | fps | < ▶ > | duplicar, copiar, colar, novo à esq., novo à dir. |
 //            desfazer, refazer | câmara | pincel, borracha, laço | tinta (círculo)
 //   Linha 2: nome da camada + olho | frames (miniaturas e barras de duração) | célula tracejada "+"
-// Botões soltos nos cantos de cima: menu, centrar a folha e rigging. A pílula em cima da barra estica a timeline.
-// Todos os controlos têm a mesma altura (StudioDims.Cell) e todos os ícones o mesmo tamanho (StudioDims.Icon).
 // ---------------------------------------------------------------------------------------------
 
-private val NameW2 = 116.dp
-private val FrameW2 = 46.dp
+private val NameW2 = 80.dp
+private val FrameW2 = 38.dp
 
 private fun EditorState.holdBy(steps: Int) {
     if (playing || steps == 0) return
@@ -99,7 +97,7 @@ internal fun FloatingCell(
     onClick: () -> Unit,
     content: @Composable (Color) -> Unit,
 ) {
-    Box(modifier.studioGlow(14.dp).padding(4.dp)) { ToolCell(selected = selected, onClick = onClick, content = content) }
+    Box(modifier.studioGlow(12.dp).padding(3.dp)) { ToolCell(selected = selected, onClick = onClick, content = content) }
 }
 
 /** Novo frame à esquerda/direita: contorno tracejado com "+" do lado onde entra e o frame existente do outro. */
@@ -111,14 +109,14 @@ private fun FrameAddGlyph(tint: Color, left: Boolean, modifier: Modifier = Modif
         val bw = w * 0.56f
         val bh = h * 0.78f
         val top = (h - bh) / 2f
-        val sw = 1.6.dp.toPx()
-        val r = CornerRadius(2.5.dp.toPx())
+        val sw = 1.4.dp.toPx()
+        val r = CornerRadius(2.dp.toPx())
         val solidX = if (left) w - bw else 0f
         val dashX = if (left) 0f else w - bw
         drawRoundRect(tint, Offset(solidX, top), Size(bw, bh), r, Stroke(sw))
         drawRoundRect(
             tint, Offset(dashX, top), Size(bw, bh), r,
-            Stroke(sw, pathEffect = PathEffect.dashPathEffect(floatArrayOf(5f, 4f))),
+            Stroke(sw, pathEffect = PathEffect.dashPathEffect(floatArrayOf(4f, 3f))),
         )
         val cx = dashX + bw / 2f
         val cy = h / 2f
@@ -194,7 +192,7 @@ internal fun StudioBottomBar(
     val count = proj.frameCount
     val scroll1 = rememberScrollState()
     Column(
-        modifier.studioGlow(20.dp).padding(6.dp),
+        modifier.studioGlow(16.dp).padding(4.dp),
         verticalArrangement = Arrangement.spacedBy(gap),
     ) {
         Row(
@@ -203,16 +201,16 @@ internal fun StudioBottomBar(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             ToolCell(width = NameW2, onClick = onLayerMenu) {
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    Text("CAMADAS", style = StudioType.Label.copy(fontSize = 11.sp, color = it), maxLines = 1)
-                    Icon(Icons.Default.Add, "Adicionar camada", tint = it, modifier = ic)
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Text("CAMADAS", style = StudioType.Label.copy(fontSize = 9.sp, color = it), maxLines = 1)
+                    Icon(Icons.Default.Add, "Adicionar camada", tint = it, modifier = Modifier.size(12.dp))
                 }
             }
-            ToolCell(width = 84.dp, onClick = {}) {
-                Text("FRAME ${cur + 1}/$count", style = StudioType.Label.copy(fontSize = 11.sp, color = it), maxLines = 1)
+            ToolCell(width = 64.dp, onClick = {}) {
+                Text("FRAME ${cur + 1}/$count", style = StudioType.Label.copy(fontSize = 9.sp, color = it), maxLines = 1)
             }
-            ToolCell(width = 62.dp, onClick = onFps) {
-                Text("$fps fps", style = StudioType.Label.copy(fontSize = 11.sp, color = it), maxLines = 1)
+            ToolCell(width = 46.dp, onClick = onFps) {
+                Text("$fps fps", style = StudioType.Label.copy(fontSize = 9.sp, color = it), maxLines = 1)
             }
             ToolCell(enabled = cur > 0 && idle, onClick = { st.go(-1) }) { TriangleGlyph(it, true, ic) }
             ToolCell(selected = st.playing, onLongClick = onFps, onClick = { st.togglePlay() }) {
@@ -265,7 +263,6 @@ private fun Layers2(
     onFrameOptions: (Int) -> Unit,
 ) {
     val all = st.project.layers.asReversed()
-    // Fechada mostra as duas camadas de cima (camada e cenário); esticada (pílula) mostra todas.
     val rows = if (expanded) all else all.take(2)
     val cellH = StudioDims.Cell
     val gap = StudioDims.Gap
@@ -279,7 +276,6 @@ private fun Layers2(
     val step = FrameW2 + 3.dp
     val stepPx = with(LocalDensity.current) { step.toPx() }
     var viewport by remember { mutableIntStateOf(0) }
-    // Quando os frames já não cabem, a janela desloca-se para o frame atual ficar sempre à vista.
     LaunchedEffect(curFrame, frameCount, viewport) {
         val left = curFrame * stepPx
         val right = left + stepPx
@@ -293,11 +289,11 @@ private fun Layers2(
             Modifier.padding(horizontal = 1.5.dp).size(width = FrameW2, height = cellH)
                 .drawBehind {
                     drawRoundRect(
-                        dash, cornerRadius = CornerRadius(9.dp.toPx()),
-                        style = Stroke(1.5.dp.toPx(), pathEffect = PathEffect.dashPathEffect(floatArrayOf(10f, 8f))),
+                        dash, cornerRadius = CornerRadius(8.dp.toPx()),
+                        style = Stroke(1.5.dp.toPx(), pathEffect = PathEffect.dashPathEffect(floatArrayOf(9f, 7f))),
                     )
                 }
-                .clip(RoundedCornerShape(9.dp))
+                .clip(RoundedCornerShape(8.dp))
                 .clickable { if (!st.playing) st.edit { p -> p.insertFrameAt(p.frameCount) } },
             contentAlignment = Alignment.Center,
         ) { Icon(Icons.Default.Add, "Novo frame", tint = StudioColors.Ink, modifier = Modifier.size(StudioDims.Icon)) }
@@ -309,8 +305,7 @@ private fun Layers2(
         Column(Modifier.width(NameW2), verticalArrangement = Arrangement.spacedBy(gap)) {
             for (l in rows) {
                 val isActive = l.id == st.activeLayerId
-                val shape = RoundedCornerShape(10.dp)
-                // A camada ativa distingue-se pelo contorno. Tocar numa camada já ativa abre as opções dela.
+                val shape = RoundedCornerShape(8.dp)
                 Row(
                     Modifier.height(cellH).fillMaxWidth().clip(shape)
                         .background(if (isActive) StudioColors.AccentSoft else StudioColors.Surface2)
@@ -324,15 +319,15 @@ private fun Layers2(
                             }
                         }
                         .clickable { if (isActive) onLayerOptions(l) else st.activeLayerId = l.id }
-                        .padding(start = 10.dp, end = 4.dp),
+                        .padding(start = 7.dp, end = 3.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Text(
-                        l.name.uppercase(), style = StudioType.Label.copy(fontSize = 11.sp),
+                        l.name.uppercase(), style = StudioType.Label.copy(fontSize = 9.sp),
                         maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f),
                     )
                     Box(
-                        Modifier.size(28.dp).clip(CircleShape).clickable { st.edit { p -> p.toggleLayerVisible(l.id) } },
+                        Modifier.size(22.dp).clip(CircleShape).clickable { st.edit { p -> p.toggleLayerVisible(l.id) } },
                         contentAlignment = Alignment.Center,
                     ) {
                         Icon(
@@ -349,15 +344,13 @@ private fun Layers2(
                     FrameRow2(st, l, sw, sh, cellH, cameraKeys, onFrameOptions, if (idx == 0) addCell else null)
                 }
             }
-            // Pega de duração: no fim da exposição do frame atual. Arrastar para a direita estende a duração
-            // (frames que partilham o desenho); para a esquerda encurta.
             if (!st.playing) {
                 val proj = st.project
                 val endIdx = proj.holdEnd(proj.currentFrame)
                 val activeRow = rows.indexOfFirst { it.id == st.activeLayerId }.coerceAtLeast(0)
                 Box(
-                    Modifier.offset(x = step * (endIdx + 1) - 12.dp, y = rowH * activeRow)
-                        .size(width = 10.dp, height = cellH).clip(RoundedCornerShape(5.dp)).background(StudioColors.Accent)
+                    Modifier.offset(x = step * (endIdx + 1) - 10.dp, y = rowH * activeRow)
+                        .size(width = 8.dp, height = cellH).clip(RoundedCornerShape(4.dp)).background(StudioColors.Accent)
                         .pointerInput(stepPx) {
                             var acc = 0f
                             detectHorizontalDragGestures(onDragStart = { acc = 0f }) { change, dx ->
@@ -376,7 +369,6 @@ private fun Layers2(
     }
 }
 
-/** Uma linha de frames (uma camada): miniatura e número, todas as células com a mesma altura. */
 @Composable
 private fun FrameRow2(
     st: EditorState,
@@ -392,8 +384,7 @@ private fun FrameRow2(
         st.project.frameIds.forEachIndexed { i, fid ->
             val strokes = l.drawingAt(fid)?.strokes
             val isCurrent = i == st.project.currentFrame
-            val shape = RoundedCornerShape(9.dp)
-            // Tocar num frame que já está selecionado (na mesma camada) abre as opções do frame.
+            val shape = RoundedCornerShape(8.dp)
             Box(
                 Modifier.padding(horizontal = 1.5.dp).size(width = FrameW2, height = cellH).clip(shape)
                     .background(if (strokes != null) Color.White else StudioColors.Surface2)
@@ -413,15 +404,15 @@ private fun FrameRow2(
                 Text(
                     "${i + 1}",
                     style = StudioType.Label.copy(
-                        fontSize = 13.sp,
+                        fontSize = 11.sp,
                         color = if (strokes != null) Color(0xFF30384F) else StudioColors.Ink,
                     ),
-                    modifier = Modifier.align(Alignment.CenterStart).padding(start = 9.dp),
+                    modifier = Modifier.align(Alignment.CenterStart).padding(start = 7.dp),
                 )
                 if (fid in cameraKeys) {
                     Box(
-                        Modifier.align(Alignment.BottomStart).padding(start = 5.dp, bottom = 3.dp)
-                            .size(6.dp).rotate(45f).background(StudioColors.Amber)
+                        Modifier.align(Alignment.BottomStart).padding(start = 4.dp, bottom = 3.dp)
+                            .size(5.dp).rotate(45f).background(StudioColors.Amber)
                     )
                 }
             }
