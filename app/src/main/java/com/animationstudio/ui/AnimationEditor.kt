@@ -35,21 +35,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Check
-import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.ContentCopy
-import androidx.compose.material.icons.filled.ContentCut
-import androidx.compose.material.icons.filled.ContentPaste
-import androidx.compose.material.icons.filled.ControlPointDuplicate
-import androidx.compose.material.icons.filled.CropSquare
 import androidx.compose.material.icons.filled.FitScreen
-import androidx.compose.material.icons.filled.Flip
-import androidx.compose.material.icons.filled.Gesture
-import androidx.compose.material.icons.filled.Image
-import androidx.compose.material.icons.filled.RadioButtonUnchecked
-import androidx.compose.material.icons.filled.RestartAlt
-import androidx.compose.material.icons.filled.RotateRight
-import androidx.compose.material.icons.filled.Transform
 import androidx.compose.material3.Icon
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
@@ -93,6 +79,7 @@ import androidx.compose.ui.input.pointer.positionChanged
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.layout.positionInRoot
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.input.KeyboardType
@@ -262,6 +249,8 @@ private fun OverlayIconChip(
 fun AnimationEditor(meta: ProjectMeta, initial: Project, store: ProjectStore, onClose: () -> Unit) {
     val context = LocalContext.current
     val prefs = remember { Prefs(context) }
+    // Tablet (menor lado >= 600 dp): barra nova em baixo. Telemóvel: interface antiga (barra no topo/fundo + painel de ferramentas ao lado).
+    val tablet = LocalConfiguration.current.smallestScreenWidthDp >= 600
     val st = remember {
         EditorState(initial).also {
             it.penOnly = prefs.penOnly
@@ -298,15 +287,22 @@ fun AnimationEditor(meta: ProjectMeta, initial: Project, store: ProjectStore, on
     val sh = sheetH.toFloat()
     val curMeta = meta.copy(width = sheetW, height = sheetH)
     val baseName = remember(meta.name) { meta.name.replace(Regex("[^A-Za-z0-9_-]"), "_").ifBlank { "animacao" } }
+    // Barra em baixo: sempre no tablet; no telemóvel conforme a preferência. Margem da barra ao bordo do ecrã.
+    val barBottom = tablet || st.timelineBottom
+    val barPad = if (tablet) 8.dp else 4.dp
 
-    /** Enquadra a folha na área livre: abaixo dos botões de cima e acima da barra de baixo. */
+    /** Enquadra a folha na área livre (fora das barras flutuantes) do espaço de trabalho, que ocupa o ecrã todo. */
     fun fitFree(w: Float, h: Float): ViewTransform {
-        val topPx = with(density) { 56.dp.toPx() }
-        val botPx = topBarHeightPx + with(density) { 8.dp.toPx() }
-        val fw = canvasSize.width.toFloat()
+        val barPx = topBarHeightPx + with(density) { barPad.toPx() * 2f }
+        val topPx = if (tablet) with(density) { 56.dp.toPx() } else if (!barBottom) barPx else 0f
+        val botPx = if (tablet) barPx else if (barBottom) barPx else 0f
+        val sidePx = if (tablet) 0f else with(density) { (StudioDims.PanelWidth + 8.dp).toPx() }
+        val left = if (!tablet && !st.toolsRight) sidePx else 0f
+        val right = if (!tablet && st.toolsRight) sidePx else 0f
+        val fw = canvasSize.width - left - right
         val fh = canvasSize.height - topPx - botPx
         val v = ViewTransform.fitSheet(w, h, fw, fh, 8f)
-        return v.copy(ty = v.ty + topPx)
+        return v.copy(tx = v.tx + left, ty = v.ty + topPx)
     }
 
     fun toast(msg: String) = Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
@@ -493,6 +489,36 @@ fun AnimationEditor(meta: ProjectMeta, initial: Project, store: ProjectStore, on
         }
     }
 
+    // Ações comuns às duas interfaces.
+    val toggleCamera: () -> Unit = {
+        st.commitFloating()
+        cameraMode = !cameraMode
+        if (!cameraMode) camView = false
+    }
+    val onToolTap: (Tool) -> Unit = { t ->
+        when {
+            // Laço: abre o painel da seleção.
+            t == Tool.LASSO -> { st.selectTool(Tool.LASSO); sidePanel = SidePanel.LASSO }
+            t == st.tool && (t == Tool.BRUSH || t == Tool.ERASER) -> dialog = EditorDialog.BrushLibrary(t)
+            else -> st.selectTool(t)
+        }
+    }
+    val onToolLibrary: (Tool) -> Unit = { t ->
+        if (t == Tool.BRUSH || t == Tool.ERASER) { st.selectTool(t); dialog = EditorDialog.BrushLibrary(t) }
+    }
+    val onToolSettings: (Tool) -> Unit = { t ->
+        st.selectTool(t)
+        dialog = if (t == Tool.BRUSH || t == Tool.ERASER) EditorDialog.BrushSettings(t) else null
+    }
+    val onSwatchDrop: (Offset) -> Unit = { p ->
+        dragPos = null
+        // Largar a tinta sobre a folha pinta a região em que se largou (como no Procreate).
+        val local = Offset(p.x - canvasRoot.x, p.y - canvasRoot.y)
+        if (!cameraMode && local.x in 0f..canvasSize.width.toFloat() && local.y in 0f..canvasSize.height.toFloat()) {
+            requestFill(st.view.screenToProject(Point(local.x, local.y)))
+        }
+    }
+
     val selectionPanel: @Composable () -> Unit = {
         SelectionPanel(
             hasSelection = st.floating != null,
@@ -519,8 +545,8 @@ fun AnimationEditor(meta: ProjectMeta, initial: Project, store: ProjectStore, on
     val camKey = CameraMath.at(st.project.frameIds, camera, st.project.currentFrame.toFloat(), sw, sh)
     val previewMatrix = if ((camView || st.playing) && !camera.isEmpty) affineMatrix(camKey.outputAffine(sw, sh)) else null
 
-    // Altura ocupada pela barra de baixo (com a margem), em dp.
-    val barDp = with(density) { topBarHeightPx.toDp() } + 8.dp
+    // Altura ocupada pela barra (com a margem), em dp: o resto do ecrã é espaço de trabalho.
+    val barDp = with(density) { topBarHeightPx.toDp() } + barPad * 2
     Box(Modifier.fillMaxSize().background(StudioColors.Workspace).onSizeChanged { rootSize = it }) {
         run {
             run {
@@ -870,7 +896,7 @@ fun AnimationEditor(meta: ProjectMeta, initial: Project, store: ProjectStore, on
                             }
                         }
                     )
-                    // Câmara: painel por cima da folha, por baixo dos botões de cima.
+                    // Câmara: painel por cima da folha, fora das barras.
                     if (cameraMode) {
                         val curKey = camera.keys[st.project.currentFrameId]
                         CameraPanel(
@@ -881,12 +907,13 @@ fun AnimationEditor(meta: ProjectMeta, initial: Project, store: ProjectStore, on
                             onDeleteKey = { camera = camera.withoutKey(st.project.currentFrameId) },
                             onToggleView = { camView = !camView },
                             onClose = { cameraMode = false; camView = false },
-                            modifier = Modifier.align(Alignment.TopCenter).padding(top = 64.dp),
+                            modifier = Modifier.align(Alignment.TopCenter)
+                                .padding(top = if (tablet) 64.dp else 8.dp + (if (!barBottom) barDp else 0.dp)),
                         )
                     }
                     // Estado solto, sem cartão: só o zoom e os avisos de trabalho em curso.
                     Row(
-                        Modifier.align(Alignment.BottomCenter).padding(bottom = barDp + 4.dp),
+                        Modifier.align(Alignment.BottomCenter).padding(bottom = 6.dp + (if (barBottom) barDp else 0.dp)),
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
                     ) {
                         Text("${(st.view.scale * 100f).roundToInt()}%", style = StudioType.Number.copy(fontSize = 11.sp, color = Color.White.copy(alpha = 0.7f)))
@@ -896,71 +923,94 @@ fun AnimationEditor(meta: ProjectMeta, initial: Project, store: ProjectStore, on
                 }
             }
         }
-        // Painel da seleção (laço): flutua à esquerda, por cima da folha e acima da barra de baixo.
-        if (sidePanel != null) {
+        if (tablet) {
+            // Painel da seleção (laço): flutua à esquerda, por cima da folha e acima da barra de baixo.
+            if (sidePanel != null) {
+                Box(
+                    Modifier.fillMaxSize().padding(top = 64.dp, bottom = barDp),
+                    contentAlignment = Alignment.CenterStart,
+                ) { Box(Modifier.verticalScroll(sideScroll)) { selectionPanel() } }
+            }
+            // Botões soltos nos cantos de cima: menu, centrar a folha e rigging (em breve).
+            FloatingCell(Modifier.align(Alignment.TopStart).padding(8.dp), onClick = { dialog = EditorDialog.Menu }) {
+                MenuGlyph(it, Modifier.size(StudioDims.Icon))
+            }
+            FloatingCell(Modifier.align(Alignment.TopCenter).padding(8.dp), onClick = { st.view = fitFree(sw, sh) }) {
+                Icon(Icons.Default.FitScreen, "Centrar a folha", tint = it, modifier = Modifier.size(StudioDims.Icon))
+            }
+            FloatingCell(Modifier.align(Alignment.TopEnd).padding(8.dp), onClick = { toast("Rigging: em breve") }) {
+                Text("RIG", style = StudioType.Label.copy(fontSize = 9.sp, color = it), maxLines = 1)
+            }
+            StudioBottomBar(
+                st = st, sw = sheetW, sh = sheetH, fps = fps, expanded = expanded,
+                cameraActive = cameraMode, cameraKeys = camera.keys.keys,
+                onLayerMenu = { dialog = EditorDialog.AddLayer },
+                onFps = { dialog = EditorDialog.FpsEdit },
+                onCamera = toggleCamera,
+                onToolTap = onToolTap, onToolLibrary = onToolLibrary, onToolSettings = onToolSettings,
+                onColor = { dialog = EditorDialog.ColorPicker(it) },
+                onSwatchDrag = { dragPos = it },
+                onSwatchDrop = onSwatchDrop,
+                onSwatchCancel = { dragPos = null },
+                onLayerOptions = { dialog = EditorDialog.LayerOptions(it.id) },
+                onMoveLayer = { id, delta -> st.edit { p -> p.moveLayer(id, delta) } },
+                onFrameOptions = { dialog = EditorDialog.FrameActions(it) },
+                modifier = Modifier.align(Alignment.BottomCenter).padding(barPad).fillMaxWidth()
+                    .onSizeChanged { topBarHeightPx = it.height },
+            )
+        } else {
+            // Barra da timeline: flutua por cima do espaço de trabalho, ocupa só o que precisa e a folha nunca a tapa.
+            Box(Modifier.align(if (barBottom) Alignment.BottomCenter else Alignment.TopCenter).padding(barPad)) {
+                TopBar(
+                    st = st, sw = sheetW, sh = sheetH, expanded = expanded,
+                    onMenu = { dialog = EditorDialog.Menu },
+                    onLayerMenu = { dialog = EditorDialog.AddLayer },
+                    onCamera = toggleCamera,
+                    onFit = { st.view = fitFree(sw, sh) },
+                    onStudio = { toast("Modo Studio: em breve") },
+                    onReference = { if (refImage == null) refLauncher.launch("image/*") else refVisible = !refVisible },
+                    onReferenceLong = { refLauncher.launch("image/*") },
+                    refActive = refImage != null && refVisible,
+                    onLayerOptions = { dialog = EditorDialog.LayerOptions(it.id) },
+                    onMoveLayer = { id, delta -> st.edit { p -> p.moveLayer(id, delta) } },
+                    onFrameOptions = { dialog = EditorDialog.FrameActions(it) },
+                    modifier = Modifier.onSizeChanged { topBarHeightPx = it.height },
+                    cameraActive = cameraMode,
+                    cameraKeys = camera.keys.keys,
+                )
+            }
+            // Barra de ferramentas (ou painel da seleção): flutua ao lado, fora da barra da timeline.
             Box(
-                Modifier.fillMaxSize().padding(top = 64.dp, bottom = barDp),
-                contentAlignment = Alignment.CenterStart,
-            ) { Box(Modifier.verticalScroll(sideScroll)) { selectionPanel() } }
-        }
-        // Botões soltos nos cantos de cima: menu, centrar a folha e rigging (em breve).
-        FloatingCell(Modifier.align(Alignment.TopStart).padding(8.dp), onClick = { dialog = EditorDialog.Menu }) {
-            MenuGlyph(it, Modifier.size(StudioDims.Icon))
-        }
-        FloatingCell(Modifier.align(Alignment.TopCenter).padding(8.dp), onClick = { st.view = fitFree(sw, sh) }) {
-            Icon(Icons.Default.FitScreen, "Centrar a folha", tint = it, modifier = Modifier.size(StudioDims.Icon))
-        }
-        FloatingCell(Modifier.align(Alignment.TopEnd).padding(8.dp), onClick = { toast("Rigging: em breve") }) {
-            Text("RIG", style = StudioType.Label.copy(fontSize = 11.sp, color = it), maxLines = 1)
-        }
-        // Barra de baixo: camadas, frames e ferramentas, tudo numa só barra de cantos arredondados.
-        StudioBottomBar(
-            st = st, sw = sheetW, sh = sheetH, fps = fps, expanded = expanded,
-            cameraActive = cameraMode, cameraKeys = camera.keys.keys,
-            onLayerMenu = { dialog = EditorDialog.AddLayer },
-            onFps = { dialog = EditorDialog.FpsEdit },
-            onCamera = {
-                st.commitFloating()
-                cameraMode = !cameraMode
-                if (!cameraMode) camView = false
-            },
-            onToolTap = { t ->
-                when {
-                    // Laço: abre o painel da seleção.
-                    t == Tool.LASSO -> { st.selectTool(Tool.LASSO); sidePanel = SidePanel.LASSO }
-                    t == st.tool && (t == Tool.BRUSH || t == Tool.ERASER) -> dialog = EditorDialog.BrushLibrary(t)
-                    else -> st.selectTool(t)
+                Modifier.fillMaxSize().padding(top = if (!barBottom) barDp else 0.dp, bottom = if (barBottom) barDp else 0.dp),
+                contentAlignment = if (st.toolsRight) Alignment.CenterEnd else Alignment.CenterStart,
+            ) {
+                Box(Modifier.verticalScroll(sideScroll)) {
+                    if (sidePanel != null) selectionPanel() else ToolPanel(
+                        st = st,
+                        onToolTap = onToolTap, onToolLibrary = onToolLibrary, onToolSettings = onToolSettings,
+                        onAddFrame = { st.edit { p -> p.insertFrameAt(p.currentFrame + 1) } },
+                        onPlayLong = { dialog = EditorDialog.FpsEdit },
+                        onColor = { dialog = EditorDialog.ColorPicker(it) },
+                        onSwatchDrag = { dragPos = it },
+                        onSwatchDrop = onSwatchDrop,
+                        onSwatchCancel = { dragPos = null },
+                    )
                 }
-            },
-            onToolLibrary = { t ->
-                if (t == Tool.BRUSH || t == Tool.ERASER) { st.selectTool(t); dialog = EditorDialog.BrushLibrary(t) }
-            },
-            onToolSettings = { t ->
-                st.selectTool(t)
-                dialog = if (t == Tool.BRUSH || t == Tool.ERASER) EditorDialog.BrushSettings(t) else null
-            },
-            onColor = { dialog = EditorDialog.ColorPicker(it) },
-            onSwatchDrag = { dragPos = it },
-            onSwatchDrop = { p ->
-                dragPos = null
-                // Largar a tinta sobre a folha pinta a região em que se largou (como no Procreate).
-                val local = Offset(p.x - canvasRoot.x, p.y - canvasRoot.y)
-                if (!cameraMode && local.x in 0f..canvasSize.width.toFloat() && local.y in 0f..canvasSize.height.toFloat()) {
-                    requestFill(st.view.screenToProject(Point(local.x, local.y)))
-                }
-            },
-            onSwatchCancel = { dragPos = null },
-            onLayerOptions = { dialog = EditorDialog.LayerOptions(it.id) },
-            onMoveLayer = { id, delta -> st.edit { p -> p.moveLayer(id, delta) } },
-            onFrameOptions = { dialog = EditorDialog.FrameActions(it) },
-            modifier = Modifier.align(Alignment.BottomCenter).padding(8.dp).fillMaxWidth()
-                .onSizeChanged { topBarHeightPx = it.height },
-        )
-        // Pílula em cima da barra: estica a timeline para mostrar todas as camadas.
-        ExpandTab(
-            expanded = expanded, atBottom = true, onSet = { expanded = it },
-            modifier = Modifier.align(Alignment.BottomCenter).offset { IntOffset(0, -(topBarHeightPx + 8.dp.roundToPx())) },
-        )
+            }
+        }
+        // Pega da timeline: aba colada à barra (1 dp sobreposta para não haver folga), do lado de dentro do ecrã.
+        val tabGap = with(density) { barPad.roundToPx() - 1.dp.roundToPx() }
+        if (barBottom) {
+            ExpandTab(
+                expanded = expanded, atBottom = true, onSet = { expanded = it },
+                modifier = Modifier.align(Alignment.BottomCenter).offset { IntOffset(0, -(topBarHeightPx + tabGap)) },
+            )
+        } else {
+            ExpandTab(
+                expanded = expanded, atBottom = false, onSet = { expanded = it },
+                modifier = Modifier.align(Alignment.TopCenter).offset { IntOffset(0, topBarHeightPx + tabGap) },
+            )
+        }
         val ref = refImage
         if (ref != null && refVisible) {
             ReferenceWindow(
@@ -974,8 +1024,8 @@ fun AnimationEditor(meta: ProjectMeta, initial: Project, store: ProjectStore, on
         val dp0 = dragPos
         if (dp0 != null) {
             Box(
-                Modifier.offset { IntOffset(dp0.x.roundToInt() - 18.dp.roundToPx(), dp0.y.roundToInt() - 18.dp.roundToPx()) }
-                    .size(36.dp).clip(CircleShape).background(Color(st.colorArgb)).border(3.dp, Color.White, CircleShape)
+                Modifier.offset { IntOffset(dp0.x.roundToInt() - 15.dp.roundToPx(), dp0.y.roundToInt() - 15.dp.roundToPx()) }
+                    .size(30.dp).clip(CircleShape).background(Color(st.colorArgb)).border(3.dp, Color.White, CircleShape)
             )
         }
     }
@@ -988,7 +1038,7 @@ fun AnimationEditor(meta: ProjectMeta, initial: Project, store: ProjectStore, on
             onPalm = { st.palmReject = it; prefs.palmReject = it },
             onGrid = { dialog = EditorDialog.Grid },
             onResolution = { dialog = EditorDialog.Resolution },
-            onOrganize = { dialog = null; toast("A barra fica sempre em baixo nesta interface") },
+            onOrganize = { if (tablet) { dialog = null; toast("No tablet a barra fica sempre em baixo") } else dialog = EditorDialog.Organize },
             onImportImage = { dialog = null; imageLauncher.launch("image/*") },
             onImportVideo = { dialog = null; videoLauncher.launch("video/*") },
             onExportVideo = { dialog = null; videoExportLauncher.launch("$baseName.mp4") },
