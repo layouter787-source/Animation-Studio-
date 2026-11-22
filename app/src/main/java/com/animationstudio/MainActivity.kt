@@ -33,8 +33,10 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Brush
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.OutlinedTextField
@@ -70,6 +72,7 @@ import com.animationstudio.ui.AnimationEditor
 import com.animationstudio.ui.StudioColors
 import com.animationstudio.ui.StudioTheme
 import com.animationstudio.ui.StudioType
+import com.animationstudio.ui.ThemeSettingsDialog
 import com.animationstudio.ui.studioCard
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -86,6 +89,8 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         System.loadLibrary("animation_engine")
         hideSystemBars()
+        // Cores escolhidas pelo utilizador (principal e destaque), lidas antes de desenhar.
+        StudioColors.load(applicationContext)
         // Relatório de falhas: se o app fechar por um erro, o texto fica guardado e é mostrado na próxima abertura.
         val crashFile = File(filesDir, "last_crash.txt")
         val previous = try { if (crashFile.exists()) crashFile.readText() else null } catch (e: Exception) { null }
@@ -214,6 +219,7 @@ private fun ProjectThumb(store: ProjectStore, meta: ProjectMeta) {
 private fun HomeScreen(store: ProjectStore, onNew: () -> Unit, onOpen: (String) -> Unit) {
     var projects by remember { mutableStateOf<List<ProjectMeta>?>(null) }
     var toDelete by remember { mutableStateOf<ProjectMeta?>(null) }
+    var showColors by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
     LaunchedEffect(Unit) { projects = withContext(Dispatchers.IO) { store.list() } }
 
@@ -268,8 +274,20 @@ private fun HomeScreen(store: ProjectStore, onNew: () -> Unit, onOpen: (String) 
                 Icon(Icons.Default.Add, null)
                 Text("  Novo projeto", style = StudioType.Label.copy(color = Color.White))
             }
+            Spacer(Modifier.height(10.dp))
+            Button(
+                onClick = { showColors = true },
+                modifier = Modifier.fillMaxWidth(0.85f).height(44.dp),
+                shape = RoundedCornerShape(14.dp),
+                colors = ButtonDefaults.buttonColors(containerColor = StudioColors.Surface2, contentColor = StudioColors.Ink),
+            ) {
+                Icon(Icons.Default.Settings, null)
+                Text("  Definições", style = StudioType.Label)
+            }
         }
     }
+
+    if (showColors) ThemeSettingsDialog { showColors = false }
 
     toDelete?.let { m ->
         AlertDialog(
