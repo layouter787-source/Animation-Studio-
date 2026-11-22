@@ -281,6 +281,10 @@ fun AnimationEditor(meta: ProjectMeta, initial: Project, store: ProjectStore, on
     var cameraMode by remember { mutableStateOf(false) }
     var camView by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
+    // Mover as barras (só no telemóvel): acompanham o dedo e assentam com animação no bordo mais próximo.
+    val tlMove = remember { EdgeMove(scope) }
+    val toolMove = remember { EdgeMove(scope) }
+    var toolW by remember { mutableIntStateOf(0) }
     val density = LocalDensity.current
     val sideScroll = rememberScrollState()
     val sw = sheetW.toFloat()
@@ -960,7 +964,10 @@ fun AnimationEditor(meta: ProjectMeta, initial: Project, store: ProjectStore, on
             )
         } else {
             // Barra da timeline: flutua por cima do espaço de trabalho, ocupa só o que precisa e a folha nunca a tapa.
-            Box(Modifier.align(if (barBottom) Alignment.BottomCenter else Alignment.TopCenter).padding(barPad)) {
+            Box(
+                Modifier.align(if (barBottom) Alignment.BottomCenter else Alignment.TopCenter).padding(barPad)
+                    .offset { IntOffset(0, tlMove.off.value.roundToInt()) }
+            ) {
                 TopBar(
                     st = st, sw = sheetW, sh = sheetH, expanded = expanded,
                     onMenu = { dialog = EditorDialog.Menu },
@@ -984,6 +991,21 @@ fun AnimationEditor(meta: ProjectMeta, initial: Project, store: ProjectStore, on
                 Modifier.fillMaxSize().padding(top = if (!barBottom) barDp else 0.dp, bottom = if (barBottom) barDp else 0.dp),
                 contentAlignment = if (st.toolsRight) Alignment.CenterEnd else Alignment.CenterStart,
             ) {
+                Column(
+                    Modifier.offset { IntOffset(toolMove.off.value.roundToInt(), 0) }.onSizeChanged { toolW = it.width },
+                    horizontalAlignment = if (st.toolsRight) Alignment.End else Alignment.Start,
+                ) {
+                    MoveTab(
+                        atBottom = false, allSides = true,
+                        onStart = { toolMove.start() },
+                        onDrag = { dx, _ -> toolMove.drag(dx, st.toolsRight, toolW.toFloat(), rootSize.width.toFloat()) },
+                        onEnd = {
+                            toolMove.release(st.toolsRight, toolW.toFloat(), rootSize.width.toFloat()) { r ->
+                                st.toolsRight = r; prefs.toolsRight = r
+                            }
+                        },
+                        modifier = Modifier.padding(bottom = 3.dp, start = 4.dp, end = 4.dp),
+                    )
                 Box(Modifier.verticalScroll(sideScroll)) {
                     if (sidePanel != null) selectionPanel() else ToolPanel(
                         st = st,
@@ -996,19 +1018,41 @@ fun AnimationEditor(meta: ProjectMeta, initial: Project, store: ProjectStore, on
                         onSwatchCancel = { dragPos = null },
                     )
                 }
+                }
             }
         }
         // Pega da timeline: aba colada à barra (1 dp sobreposta para não haver folga), do lado de dentro do ecrã.
         val tabGap = with(density) { barPad.roundToPx() - 1.dp.roundToPx() }
+        val tlOffY = tlMove.off.value.roundToInt()
         if (barBottom) {
             ExpandTab(
                 expanded = expanded, atBottom = true, onSet = { expanded = it },
-                modifier = Modifier.align(Alignment.BottomCenter).offset { IntOffset(0, -(topBarHeightPx + tabGap)) },
+                modifier = Modifier.align(Alignment.BottomCenter).offset { IntOffset(0, -(topBarHeightPx + tabGap) + tlOffY) },
             )
         } else {
             ExpandTab(
                 expanded = expanded, atBottom = false, onSet = { expanded = it },
-                modifier = Modifier.align(Alignment.TopCenter).offset { IntOffset(0, topBarHeightPx + tabGap) },
+                modifier = Modifier.align(Alignment.TopCenter).offset { IntOffset(0, topBarHeightPx + tabGap + tlOffY) },
+            )
+        }
+        if (!tablet) {
+            // Pega para mover a barra da timeline: ao lado da pega de esticar, também colada à barra.
+            val barTotal = topBarHeightPx + with(density) { barPad.toPx() * 2f }
+            MoveTab(
+                atBottom = barBottom,
+                onStart = { tlMove.start() },
+                onDrag = { _, dy -> tlMove.drag(dy, barBottom, barTotal, rootSize.height.toFloat()) },
+                onEnd = {
+                    tlMove.release(barBottom, barTotal, rootSize.height.toFloat()) { b ->
+                        st.timelineBottom = b; prefs.timelineBottom = b
+                    }
+                },
+                modifier = Modifier
+                    .align(if (barBottom) Alignment.BottomCenter else Alignment.TopCenter)
+                    .offset {
+                        val x = -(50.dp.roundToPx() / 2 + 30.dp.roundToPx() / 2 + 3.dp.roundToPx())
+                        IntOffset(x, if (barBottom) -(topBarHeightPx + tabGap) + tlOffY else topBarHeightPx + tabGap + tlOffY)
+                    },
             )
         }
         val ref = refImage
