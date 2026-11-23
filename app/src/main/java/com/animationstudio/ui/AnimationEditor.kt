@@ -985,18 +985,31 @@ fun AnimationEditor(meta: ProjectMeta, initial: Project, store: ProjectStore, on
                     cameraActive = cameraMode,
                     cameraKeys = camera.keys.keys,
                 )
+                // Pega para mover a barra: na ponta direita, a meio da altura, sobre a linha da borda.
+                val barTotal = topBarHeightPx + with(density) { barPad.toPx() * 2f }
+                MoveTab(
+                    vertical = true,
+                    onStart = { tlMove.start() },
+                    onDrag = { _, dy -> tlMove.drag(dy, barBottom, barTotal, rootSize.height.toFloat()) },
+                    onEnd = {
+                        tlMove.release(barBottom, barTotal, rootSize.height.toFloat()) { b ->
+                            st.timelineBottom = b; prefs.timelineBottom = b
+                        }
+                    },
+                    modifier = Modifier.align(Alignment.CenterEnd).offset(x = 4.dp),
+                )
             }
             // Barra de ferramentas (ou painel da seleção): flutua ao lado, fora da barra da timeline.
             Box(
                 Modifier.fillMaxSize().padding(top = if (!barBottom) barDp else 0.dp, bottom = if (barBottom) barDp else 0.dp),
                 contentAlignment = if (st.toolsRight) Alignment.CenterEnd else Alignment.CenterStart,
             ) {
-                Column(
+                Box(
                     Modifier.offset { IntOffset(toolMove.off.value.roundToInt(), 0) }.onSizeChanged { toolW = it.width },
-                    horizontalAlignment = if (st.toolsRight) Alignment.End else Alignment.Start,
                 ) {
+                    // Pega para mover o painel: no meio do topo, sobre a linha da borda.
                     MoveTab(
-                        atBottom = false, allSides = true,
+                        vertical = false,
                         onStart = { toolMove.start() },
                         onDrag = { dx, _ -> toolMove.drag(dx, st.toolsRight, toolW.toFloat(), rootSize.width.toFloat()) },
                         onEnd = {
@@ -1004,7 +1017,7 @@ fun AnimationEditor(meta: ProjectMeta, initial: Project, store: ProjectStore, on
                                 st.toolsRight = r; prefs.toolsRight = r
                             }
                         },
-                        modifier = Modifier.padding(bottom = 3.dp, start = 4.dp, end = 4.dp),
+                        modifier = Modifier.align(Alignment.TopCenter).offset(y = (-7).dp),
                     )
                 Box(Modifier.verticalScroll(sideScroll)) {
                     if (sidePanel != null) selectionPanel() else ToolPanel(
@@ -1033,26 +1046,6 @@ fun AnimationEditor(meta: ProjectMeta, initial: Project, store: ProjectStore, on
             ExpandTab(
                 expanded = expanded, atBottom = false, onSet = { expanded = it },
                 modifier = Modifier.align(Alignment.TopCenter).offset { IntOffset(0, topBarHeightPx + tabGap + tlOffY) },
-            )
-        }
-        if (!tablet) {
-            // Pega para mover a barra da timeline: ao lado da pega de esticar, também colada à barra.
-            val barTotal = topBarHeightPx + with(density) { barPad.toPx() * 2f }
-            MoveTab(
-                atBottom = barBottom,
-                onStart = { tlMove.start() },
-                onDrag = { _, dy -> tlMove.drag(dy, barBottom, barTotal, rootSize.height.toFloat()) },
-                onEnd = {
-                    tlMove.release(barBottom, barTotal, rootSize.height.toFloat()) { b ->
-                        st.timelineBottom = b; prefs.timelineBottom = b
-                    }
-                },
-                modifier = Modifier
-                    .align(if (barBottom) Alignment.BottomCenter else Alignment.TopCenter)
-                    .offset {
-                        val x = -(50.dp.roundToPx() / 2 + 30.dp.roundToPx() / 2 + 3.dp.roundToPx())
-                        IntOffset(x, if (barBottom) -(topBarHeightPx + tabGap) + tlOffY else topBarHeightPx + tabGap + tlOffY)
-                    },
             )
         }
         val ref = refImage
