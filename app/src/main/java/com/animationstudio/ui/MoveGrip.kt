@@ -6,8 +6,10 @@ import androidx.compose.animation.core.spring
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -63,27 +65,27 @@ internal class EdgeMove(private val scope: CoroutineScope) {
     }
 }
 
-/** Pega pequena, colada à barra, para a mover. Só no telemóvel. */
+/**
+ * Pega para mover uma barra: pequena, de cantos arredondados, assente sobre a linha da borda da barra.
+ * [vertical] = pega alta (na ponta da barra da timeline, arrasta na vertical); senão larga (no topo do painel, arrasta na horizontal).
+ * As três linhas seguem o lado maior da pega.
+ */
 @Composable
 internal fun MoveTab(
-    atBottom: Boolean,
+    vertical: Boolean,
     onStart: () -> Unit,
     onDrag: (Float, Float) -> Unit,
     onEnd: () -> Unit,
     modifier: Modifier = Modifier,
-    allSides: Boolean = false,
 ) {
     val curStart by rememberUpdatedState(onStart)
     val curDrag by rememberUpdatedState(onDrag)
     val curEnd by rememberUpdatedState(onEnd)
-    val r = 8.dp
-    val shape = when {
-        allSides -> RoundedCornerShape(r)
-        atBottom -> RoundedCornerShape(topStart = r, topEnd = r)
-        else -> RoundedCornerShape(bottomStart = r, bottomEnd = r)
-    }
+    val shape = RoundedCornerShape(7.dp)
+    val lineColor = Color(0xFF6E96FF)
     Box(
-        modifier.width(30.dp).height(14.dp).clip(shape).background(StudioColors.Navy).border(1.dp, StudioColors.Outline, shape)
+        modifier.width(if (vertical) 14.dp else 32.dp).height(if (vertical) 32.dp else 14.dp)
+            .clip(shape).background(StudioColors.Navy).border(1.dp, StudioColors.Outline, shape)
             .pointerInput(Unit) {
                 detectDragGestures(
                     onDragStart = { curStart() },
@@ -96,9 +98,14 @@ internal fun MoveTab(
             },
         contentAlignment = Alignment.Center,
     ) {
-        Column(verticalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(2.dp)) {
-            Box(Modifier.width(12.dp).height(2.dp).clip(RoundedCornerShape(1.dp)).background(Color(0xFF6E96FF)))
-            Box(Modifier.width(12.dp).height(2.dp).clip(RoundedCornerShape(1.dp)).background(Color(0xFF6E96FF)))
+        if (vertical) {
+            Row(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
+                repeat(3) { Box(Modifier.width(2.dp).height(14.dp).clip(RoundedCornerShape(1.dp)).background(lineColor)) }
+            }
+        } else {
+            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                repeat(3) { Box(Modifier.width(14.dp).height(2.dp).clip(RoundedCornerShape(1.dp)).background(lineColor)) }
+            }
         }
     }
 }
