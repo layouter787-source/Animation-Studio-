@@ -7,6 +7,12 @@ import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -503,8 +509,9 @@ fun AnimationEditor(meta: ProjectMeta, initial: Project, store: ProjectStore, on
         when {
             // Laço: abre o painel da seleção.
             t == Tool.LASSO -> { st.selectTool(Tool.LASSO); sidePanel = SidePanel.LASSO }
-            t == st.tool && (t == Tool.BRUSH || t == Tool.ERASER) -> dialog = EditorDialog.BrushLibrary(t)
-            else -> st.selectTool(t)
+            // Outra ferramenta: o painel da seleção sai (suavemente) e a seleção em curso fica fixa.
+            t == st.tool && (t == Tool.BRUSH || t == Tool.ERASER) -> { sidePanel = null; dialog = EditorDialog.BrushLibrary(t) }
+            else -> { sidePanel = null; st.commitFloating(); st.selectTool(t) }
         }
     }
     val onToolLibrary: (Tool) -> Unit = { t ->
@@ -523,6 +530,12 @@ fun AnimationEditor(meta: ProjectMeta, initial: Project, store: ProjectStore, on
         }
     }
 
+    // O painel da seleção não substitui a barra de ferramentas. Sai (suave) quando a seleção em uso termina (toque fora, "nada").
+    var hadFloating by remember { mutableStateOf(false) }
+    LaunchedEffect(st.floating != null) {
+        if (st.floating != null) hadFloating = true
+        else if (hadFloating) { hadFloating = false; sidePanel = null }
+    }
     val selectionPanel: @Composable () -> Unit = {
         SelectionPanel(
             hasSelection = st.floating != null,
@@ -543,6 +556,14 @@ fun AnimationEditor(meta: ProjectMeta, initial: Project, store: ProjectStore, on
             onPerspective = { st.togglePerspective() },
             onMesh = { toast("Malha: em breve") },
         )
+    }
+    val selAnim: @Composable () -> Unit = {
+        val dirSign = if (tablet || !st.toolsRight) -1 else 1
+        AnimatedVisibility(
+            visible = sidePanel != null,
+            enter = fadeIn(tween(220)) + slideInHorizontally(tween(220)) { w -> dirSign * w / 2 },
+            exit = fadeOut(tween(340)) + slideOutHorizontally(tween(340)) { w -> dirSign * w / 2 },
+        ) { Box(Modifier.padding(horizontal = 6.dp).verticalScroll(rememberScrollState())) { selectionPanel() } }
     }
 
     // Câmara do frame atual (para o enquadramento de edição) e a que se vê ao reproduzir ou em "ver pela câmara".
@@ -928,13 +949,11 @@ fun AnimationEditor(meta: ProjectMeta, initial: Project, store: ProjectStore, on
             }
         }
         if (tablet) {
-            // Painel da seleção (laço): flutua à esquerda, por cima da folha e acima da barra de baixo.
-            if (sidePanel != null) {
-                Box(
-                    Modifier.fillMaxSize().padding(top = 64.dp, bottom = barDp),
-                    contentAlignment = Alignment.CenterStart,
-                ) { Box(Modifier.verticalScroll(sideScroll)) { selectionPanel() } }
-            }
+            // Painel da seleção (laço): flutua à esquerda, por cima da folha e acima da barra de baixo; entra e sai suavemente.
+            Box(
+                Modifier.fillMaxSize().padding(top = 64.dp, bottom = barDp),
+                contentAlignment = Alignment.CenterStart,
+            ) { selAnim() }
             // Botões soltos nos cantos de cima: menu, centrar a folha e rigging (em breve).
             FloatingCell(Modifier.align(Alignment.TopStart).padding(8.dp), onClick = { dialog = EditorDialog.Menu }) {
                 MenuGlyph(it, Modifier.size(StudioDims.Icon))
@@ -999,11 +1018,13 @@ fun AnimationEditor(meta: ProjectMeta, initial: Project, store: ProjectStore, on
                     modifier = Modifier.align(Alignment.CenterEnd).offset(x = 4.dp),
                 )
             }
-            // Barra de ferramentas (ou painel da seleção): flutua ao lado, fora da barra da timeline.
+            // Barra de ferramentas: fica sempre visível. O painel da seleção abre ao lado dela (do lado de dentro) e sai suavemente.
             Box(
                 Modifier.fillMaxSize().padding(top = if (!barBottom) barDp else 0.dp, bottom = if (barBottom) barDp else 0.dp),
                 contentAlignment = if (st.toolsRight) Alignment.CenterEnd else Alignment.CenterStart,
             ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                if (st.toolsRight) selAnim()
                 Box(
                     Modifier.offset { IntOffset(toolMove.off.value.roundToInt(), 0) }.onSizeChanged { toolW = it.width },
                 ) {
@@ -1020,7 +1041,7 @@ fun AnimationEditor(meta: ProjectMeta, initial: Project, store: ProjectStore, on
                         modifier = Modifier.align(Alignment.TopCenter).offset(y = (-7).dp),
                     )
                 Box(Modifier.verticalScroll(sideScroll)) {
-                    if (sidePanel != null) selectionPanel() else ToolPanel(
+                    ToolPanel(
                         st = st,
                         onToolTap = onToolTap, onToolLibrary = onToolLibrary, onToolSettings = onToolSettings,
                         onAddFrame = { st.edit { p -> p.insertFrameAt(p.currentFrame + 1) } },
@@ -1031,6 +1052,8 @@ fun AnimationEditor(meta: ProjectMeta, initial: Project, store: ProjectStore, on
                         onSwatchCancel = { dragPos = null },
                     )
                 }
+                }
+                if (!st.toolsRight) selAnim()
                 }
             }
         }
