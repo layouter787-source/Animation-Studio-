@@ -32,6 +32,31 @@ android {
         }
     }
 
+    // Assinatura de release: só se o CI (ou o utilizador) definir KEYSTORE_FILE, KEYSTORE_PASSWORD, KEY_ALIAS e KEY_PASSWORD.
+    // Sem essas variáveis o release sai sem assinar (app-release-unsigned.apk).
+    val keystorePath: String? = System.getenv("KEYSTORE_FILE")?.takeIf { it.isNotBlank() && File(it).exists() }
+    signingConfigs {
+        if (keystorePath != null) {
+            create("release") {
+                storeFile = File(keystorePath)
+                storePassword = System.getenv("KEYSTORE_PASSWORD")
+                keyAlias = System.getenv("KEY_ALIAS")
+                keyPassword = System.getenv("KEY_PASSWORD")
+            }
+        }
+    }
+    buildTypes {
+        release {
+            isMinifyEnabled = false
+            if (keystorePath != null) signingConfig = signingConfigs.getByName("release")
+        }
+    }
+    // O lint de release não deve impedir a geração dos pacotes.
+    lint {
+        checkReleaseBuilds = false
+        abortOnError = false
+    }
+
     externalNativeBuild {
         cmake {
             path = file("src/main/cpp/CMakeLists.txt")
