@@ -90,6 +90,12 @@ object ProjectJson {
             pts.put(pt.y.toDouble())
         }
         so.put("p", pts)
+        // Pressão real da caneta por ponto; só se guarda quando algum ponto tem pressão registada.
+        if (s.points.any { it.p != 1f }) {
+            val qs = JSONArray()
+            for (pt in s.points) qs.put(Math.round(pt.p.toDouble() * 1000.0) / 1000.0)
+            so.put("q", qs)
+        }
         val f = s.fill
         if (f != null) {
             val fo = JSONObject()
@@ -124,7 +130,11 @@ object ProjectJson {
 
     private fun decodeStroke(so: JSONObject): BrushStroke {
         val pa = so.getJSONArray("p")
-        val pts = List(pa.length() / 2) { k -> Point(pa.getDouble(2 * k).toFloat(), pa.getDouble(2 * k + 1).toFloat()) }
+        val qa = if (so.has("q")) so.getJSONArray("q") else null
+        val pts = List(pa.length() / 2) { k ->
+            val pr = if (qa != null && k < qa.length()) qa.getDouble(k).toFloat() else 1f
+            Point(pa.getDouble(2 * k).toFloat(), pa.getDouble(2 * k + 1).toFloat(), pr)
+        }
         var fill: FillRegion? = null
         if (so.has("f")) {
             val fo = so.getJSONObject("f")

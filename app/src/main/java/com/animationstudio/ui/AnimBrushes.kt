@@ -136,44 +136,34 @@ internal object AnimBrushes {
     }
 
     /**
-     * Rasteriza o traço [s] com o pincel [abId]. O traço guardado só tem posições: a pressão é sintetizada (sobe no
-     * início e desce no fim). O tamanho do pincel da app (diâmetro) vira o raio do motor.
+     * Rasteriza o traço [s] com o pincel [abId], com a pressão real guardada em cada ponto (Point.p); nada é
+     * sintetizado. O tamanho do pincel da app (diâmetro) vira o raio do motor.
      */
     fun render(abId: String, s: BrushStroke): AnimBrushImage? {
         val src = s.points
         if (src.isEmpty()) return null
         val step = max(1, (src.size + MAX_POINTS - 1) / MAX_POINTS)
-        val xs = ArrayList<Float>()
-        val ys = ArrayList<Float>()
+        val kept = ArrayList<com.animationstudio.domain.Point>()
         var i = 0
         while (i < src.size) {
-            xs.add(src[i].x)
-            ys.add(src[i].y)
+            kept.add(src[i])
             i += step
         }
         val last = src.last()
-        if (xs.last() != last.x || ys.last() != last.y) {
-            xs.add(last.x)
-            ys.add(last.y)
-        }
-        val n = xs.size
-        val ramp = min(10, n / 3)
+        if (kept.last() != last) kept.add(last)
+        val n = kept.size
         val flat = FloatArray(n * 3)
         for (k in 0 until n) {
-            var p = 0.7f
-            if (ramp > 0) {
-                if (k < ramp) p *= 0.4f + 0.6f * k / ramp
-                if (k >= n - ramp) p *= 0.4f + 0.6f * (n - 1 - k) / ramp
-            }
-            flat[3 * k] = xs[k]
-            flat[3 * k + 1] = ys[k]
-            flat[3 * k + 2] = p
+            flat[3 * k] = kept[k].x
+            flat[3 * k + 1] = kept[k].y
+            flat[3 * k + 2] = kept[k].p.coerceIn(0f, 1f)
         }
         val c = s.colorArgb
         val r = ((c shr 16) and 0xFF) / 255f
         val g = ((c shr 8) and 0xFF) / 255f
         val b = (c and 0xFF) / 255f
-        val seed = (src[0].x.toBits() * 31 + src[0].y.toBits()) xor (n * 7919)
+        // A semente só depende do ponto inicial: o traço em curso não muda de aspeto a cada ponto novo.
+        val seed = src[0].x.toBits() * 31 + src[0].y.toBits()
         val data = try {
             AnimBrushNative.nativeRender(abId, flat, max(0.3f, s.width / 2f), r, g, b, seed, s.erase)
         } catch (e: UnsatisfiedLinkError) {
