@@ -6,6 +6,25 @@
 
 #include "animbrush_core.h"
 
+namespace {
+/** Vetor devolvido ao Kotlin: [largura, altura, bits(x), bits(y), bits(escala), píxeis ARGB...]. */
+jintArray packImage(JNIEnv* env, const abridge::Image& img) {
+    if (img.w <= 0 || img.h <= 0) return nullptr;
+    const jsize n = static_cast<jsize>(5 + img.argb.size());
+    jintArray out = env->NewIntArray(n);
+    if (out == nullptr) return nullptr;
+    int32_t head[5];
+    head[0] = img.w;
+    head[1] = img.h;
+    std::memcpy(&head[2], &img.x, sizeof(float));
+    std::memcpy(&head[3], &img.y, sizeof(float));
+    std::memcpy(&head[4], &img.scale, sizeof(float));
+    env->SetIntArrayRegion(out, 0, 5, reinterpret_cast<const jint*>(head));
+    env->SetIntArrayRegion(out, 5, static_cast<jsize>(img.argb.size()), reinterpret_cast<const jint*>(img.argb.data()));
+    return out;
+}
+}  // namespace
+
 extern "C" {
 
 JNIEXPORT jboolean JNICALL Java_com_animationstudio_ui_AnimBrushNative_nativeAvailable(JNIEnv*, jobject) {
@@ -28,10 +47,7 @@ JNIEXPORT jbyteArray JNICALL Java_com_animationstudio_ui_AnimBrushNative_nativeC
     return out;
 }
 
-/**
- * Devolve null (nada para desenhar ou pincel desconhecido) ou um vetor: [largura, altura, bits(x), bits(y), bits(escala),
- * píxeis ARGB...]. x, y e escala são floats guardados como bits.
- */
+/** Devolve null (nada para desenhar ou pincel desconhecido) ou o vetor descrito em packImage. */
 JNIEXPORT jintArray JNICALL Java_com_animationstudio_ui_AnimBrushNative_nativeRender(
     JNIEnv* env, jobject, jstring id, jfloatArray pts, jfloat radius, jfloat r, jfloat g, jfloat b, jint seed, jboolean eraser) {
     if (id == nullptr || pts == nullptr) return nullptr;
@@ -45,20 +61,37 @@ JNIEXPORT jintArray JNICALL Java_com_animationstudio_ui_AnimBrushNative_nativeRe
     abridge::Image img;
     const bool ok = abridge::render(cid, p.data(), count, radius, r, g, b, static_cast<uint32_t>(seed), eraser == JNI_TRUE, img);
     env->ReleaseStringUTFChars(id, cid);
-    if (!ok || img.w <= 0 || img.h <= 0) return nullptr;
+    if (!ok) return nullptr;
+    return packImage(env, img);
+}
 
-    const jsize n = static_cast<jsize>(5 + img.argb.size());
-    jintArray out = env->NewIntArray(n);
-    if (out == nullptr) return nullptr;
-    int32_t head[5];
-    head[0] = img.w;
-    head[1] = img.h;
-    std::memcpy(&head[2], &img.x, sizeof(float));
-    std::memcpy(&head[3], &img.y, sizeof(float));
-    std::memcpy(&head[4], &img.scale, sizeof(float));
-    env->SetIntArrayRegion(out, 0, 5, reinterpret_cast<const jint*>(head));
-    env->SetIntArrayRegion(out, 5, static_cast<jsize>(img.argb.size()), reinterpret_cast<const jint*>(img.argb.data()));
-    return out;
+// ---- traço ao vivo: devolvem a área alterada (como nativeRender) ou null se nada mudou ----
+
+JNIEXPORT jintArray JNICALL Java_com_animationstudio_ui_AnimBrushNative_nativeLiveBegin(
+    JNIEnv* env, jobject, jstring id, jfloat sheetW, jfloat sheetH, jfloat radius, jfloat r, jfloat g, jfloat b, jint seed,
+    jboolean eraser, jfloat x, jfloat y, jfloat pressure) {
+    if (id == nullptr) return nullptr;
+    const char* cid = env->GetStringUTFChars(id, nullptr);
+    if (cid == nullptr) return nullptr;
+    abridge::Image img;
+    const bool ok = abridge::liveBegin(cid, sheetW, sheetH, radius, r, g, b, static_cast<uint32_t>(seed), eraser == JNI_TRUE, x, y, pressure, img);
+    env->ReleaseStringUTFChars(id, cid);
+    return ok ? packImage(env, img) : nullptr;
+}
+
+JNIEXPORT jintArray JNICALL Java_com_animationstudio_ui_AnimBrushNative_nativeLiveMove(
+    JNIEnv* env, jobject, jfloat x, jfloat y, jfloat pressure, jfloat dtSeconds) {
+    abridge::Image img;
+    return abridge::liveMove(x, y, pressure, dtSeconds, img) ? packImage(env, img) : nullptr;
+}
+
+JNIEXPORT jintArray JNICALL Java_com_animationstudio_ui_AnimBrushNative_nativeLiveEnd(JNIEnv* env, jobject) {
+    abridge::Image img;
+    return abridge::liveEnd(img) ? packImage(env, img) : nullptr;
+}
+
+JNIEXPORT void JNICALL Java_com_animationstudio_ui_AnimBrushNative_nativeLiveCancel(JNIEnv*, jobject) {
+    abridge::liveCancel();
 }
 
 }  // extern "C"

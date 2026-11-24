@@ -33,4 +33,16 @@ struct Image {
 bool render(const char* id, const float* pts, int count, float radius, float r, float g, float b, uint32_t seed,
             bool eraser, Image& out);
 
+/**
+ * Traço ao vivo: o mesmo motor, alimentado amostra a amostra com a pressão e o tempo reais da caneta.
+ * Há uma sessão de cada vez. Cada chamada devolve em [dirty] só a área que mudou (false = nada mudou).
+ * A superfície cobre a folha inteira ([sheetW] x [sheetH] unidades; escala 1, ou menor se passar o limite de memória).
+ * Borrachas: a imagem é a quantidade apagada, como em render().
+ */
+bool liveBegin(const char* id, float sheetW, float sheetH, float radius, float r, float g, float b, uint32_t seed,
+               bool eraser, float x, float y, float pressure, Image& dirty);
+bool liveMove(float x, float y, float pressure, float dtSeconds, Image& dirty);
+bool liveEnd(Image& dirty);
+void liveCancel();
+
 }  // namespace abridge
