@@ -5,8 +5,11 @@ import kotlin.math.cos
 import kotlin.math.min
 import kotlin.math.sin
 
-/** Ponto em coordenadas do projeto (folha) ou do ecrã, conforme o contexto da chamada. */
-data class Point(val x: Float, val y: Float)
+/**
+ * Ponto em coordenadas do projeto (folha) ou do ecrã, conforme o contexto da chamada.
+ * [p] é a pressão real da caneta nesse ponto (0 a 1); 1 quando não há pressão registada.
+ */
+data class Point(val x: Float, val y: Float, val p: Float = 1f)
 
 /**
  * Transformação única da vista: projeto -> ecrã.

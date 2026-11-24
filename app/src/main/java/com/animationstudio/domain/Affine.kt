@@ -7,7 +7,7 @@ import kotlin.math.sqrt
 
 /** Transformação afim 2D: x' = a·x + c·y + tx ; y' = b·x + d·y + ty. */
 data class Affine(val a: Float, val b: Float, val c: Float, val d: Float, val tx: Float, val ty: Float) {
-    fun map(p: Point): Point = Point(a * p.x + c * p.y + tx, b * p.x + d * p.y + ty)
+    fun map(p: Point): Point = p.copy(x = a * p.x + c * p.y + tx, y = b * p.x + d * p.y + ty)
 
     val scaleFactor: Float get() = sqrt(abs(a * d - b * c))
 
