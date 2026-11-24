@@ -3,6 +3,7 @@
 #ifdef ANIMBRUSH_ENABLED
 #include <algorithm>
 #include <cmath>
+#include <memory>
 #include <mutex>
 
 #include "animbrush/animbrush.hpp"
@@ -13,6 +14,110 @@ std::mutex g_mutex;  // os pincéis usam registos globais (biblioteca e texturas
 
 constexpr double kMaxPixels = 4500000.0;  // limite de memória da superfície (float RGBA = 16 bytes por píxel)
 constexpr float kDt = 0.008f;             // o traço guardado não tem tempos: 8 ms por amostra
+
+/** Superfície que regista a área tocada por cada pincelada (caixa exata, em píxeis da superfície). */
+class TrackingSurface : public ab::RasterSurface {
+public:
+    TrackingSurface(int w, int h) : ab::RasterSurface(w, h) {}
+
+    void drawDab(const ab::Dab& d) override {
+        ab::RasterSurface::drawDab(d);
+        const float r = std::max(0.05f, d.radius) * std::max(1.f, std::max(0.05f, d.aspect)) + 2.5f;
+        add(static_cast<int>(std::floor(d.x - r)), static_cast<int>(std::floor(d.y - r)),
+            static_cast<int>(std::ceil(d.x + r)), static_cast<int>(std::ceil(d.y + r)));
+    }
+
+    void compositePatch(const ab::Patch& p, ab::Blend mode, float opacity) override {
+        ab::RasterSurface::compositePatch(p, mode, opacity);
+        add(p.x0, p.y0, p.x0 + p.w, p.y0 + p.h);
+    }
+
+    bool takeDirty(ab::IRect& out) {
+        if (dirty_.empty()) return false;
+        out = dirty_;
+        dirty_ = ab::IRect{};
+        return true;
+    }
+
+private:
+    void add(int x0, int y0, int x1, int y1) {
+        x0 = std::max(0, x0);
+        y0 = std::max(0, y0);
+        x1 = std::min(width(), x1);
+        y1 = std::min(height(), y1);
+        if (x1 <= x0 || y1 <= y0) return;
+        if (dirty_.empty()) {
+            dirty_ = ab::IRect{x0, y0, x1, y1};
+        } else {
+            dirty_.x0 = std::min(dirty_.x0, x0);
+            dirty_.y0 = std::min(dirty_.y0, y0);
+            dirty_.x1 = std::max(dirty_.x1, x1);
+            dirty_.y1 = std::max(dirty_.y1, y1);
+        }
+    }
+    ab::IRect dirty_;
+};
+
+struct LiveSession {
+    std::unique_ptr<ab::Brush> brush;
+    std::unique_ptr<TrackingSurface> surface;
+    float scale = 1.f;
+    bool eraser = false;
+    bool started = false;
+    bool ended = false;
+    ab::StrokeParams sp;
+};
+std::unique_ptr<LiveSession> g_live;
+
+uint32_t packPixel(const float* p, bool eraser) {  // p: pré-multiplicado
+    float a, r, g, b;
+    if (eraser) {
+        a = 1.f - p[3];
+        r = g = b = 0.f;
+    } else {
+        a = p[3];
+        if (a > 1e-5f) {
+            r = std::min(1.f, p[0] / a);
+            g = std::min(1.f, p[1] / a);
+            b = std::min(1.f, p[2] / a);
+        } else {
+            r = g = b = 0.f;
+        }
+    }
+    a = std::min(1.f, std::max(0.f, a));
+    const uint32_t A = static_cast<uint32_t>(a * 255.f + 0.5f);
+    const uint32_t R = static_cast<uint32_t>(r * 255.f + 0.5f);
+    const uint32_t G = static_cast<uint32_t>(g * 255.f + 0.5f);
+    const uint32_t B = static_cast<uint32_t>(b * 255.f + 0.5f);
+    return (A << 24) | (R << 16) | (G << 8) | B;
+}
+
+/** Copia a área tocada desde a última chamada. Devolve false se nada mudou. */
+bool takeDirtyImage(LiveSession& s, Image& out) {
+    ab::IRect r;
+    if (!s.surface->takeDirty(r)) return false;
+    out.w = r.w();
+    out.h = r.h();
+    out.scale = s.scale;
+    out.x = static_cast<float>(r.x0) / s.scale;
+    out.y = static_cast<float>(r.y0) / s.scale;
+    out.argb.assign(static_cast<size_t>(out.w) * out.h, 0u);
+    for (int y = r.y0; y < r.y1; ++y) {
+        for (int x = r.x0; x < r.x1; ++x) {
+            out.argb[static_cast<size_t>(y - r.y0) * out.w + (x - r.x0)] = packPixel(s.surface->pixel(x, y), s.eraser);
+        }
+    }
+    return true;
+}
+
+ab::InputSample liveSample(const LiveSession& s, float x, float y, float pressure, float dt) {
+    ab::InputSample in;
+    in.x = x * s.scale;
+    in.y = y * s.scale;
+    in.pressure = std::min(1.f, std::max(0.05f, pressure));
+    in.dt = std::min(0.1f, std::max(0.001f, dt));  // tempo real entre amostras, limitado a valores sãos
+    return in;
+}
 }  // namespace
 
 bool available() { return true; }
@@ -44,12 +149,14 @@ bool render(const char* id, const float* pts, int count, float radius, float cr,
         maxy = std::max(maxy, pts[3 * i + 1]);
     }
     radius = std::max(0.3f, radius);
-    // Margem à volta do traço: ramos, brilho, raios e copas passam do caminho.
-    const float margin = std::max(48.f, radius * 4.f);
+    // Margem à volta do traço: ramos, copas das árvores, brilho e raios passam muito do caminho. Uma margem curta
+    // cortava a textura (testado com todo o catálogo: com 400 só ficam por baixo da margem os pincéis de linhas de foco,
+    // que por desenho se estendem sem limite).
+    const float margin = std::max(400.f, radius * 24.f);
     const float bw = (maxx - minx) + 2.f * margin;
     const float bh = (maxy - miny) + 2.f * margin;
-    // Dobra a resolução em traços pequenos (nitidez ao ampliar); reduz em traços enormes (memória).
-    float scale = (static_cast<double>(bw) * bh * 4.0 <= 1.2e6) ? 2.f : 1.f;
+    // Resolução 1:1; reduz só em traços enormes (memória).
+    float scale = 1.f;
     if (static_cast<double>(bw) * bh * scale * scale > kMaxPixels) {
         scale = static_cast<float>(std::sqrt(kMaxPixels / (static_cast<double>(bw) * bh)));
     }
@@ -110,30 +217,66 @@ bool render(const char* id, const float* pts, int count, float radius, float cr,
     out.argb.assign(static_cast<size_t>(out.w) * out.h, 0u);
     for (int y = y0; y <= y1; ++y) {
         for (int x = x0; x <= x1; ++x) {
-            const float* p = surface.pixel(x, y);  // pré-multiplicado
-            float a, r, g, b;
-            if (eraser) {
-                a = 1.f - p[3];
-                r = g = b = 0.f;
-            } else {
-                a = p[3];
-                if (a > 1e-5f) {
-                    r = std::min(1.f, p[0] / a);
-                    g = std::min(1.f, p[1] / a);
-                    b = std::min(1.f, p[2] / a);
-                } else {
-                    r = g = b = 0.f;
-                }
-            }
-            a = std::min(1.f, std::max(0.f, a));
-            const uint32_t A = static_cast<uint32_t>(a * 255.f + 0.5f);
-            const uint32_t R = static_cast<uint32_t>(r * 255.f + 0.5f);
-            const uint32_t G = static_cast<uint32_t>(g * 255.f + 0.5f);
-            const uint32_t B = static_cast<uint32_t>(b * 255.f + 0.5f);
-            out.argb[static_cast<size_t>(y - y0) * out.w + (x - x0)] = (A << 24) | (R << 16) | (G << 8) | B;
+            out.argb[static_cast<size_t>(y - y0) * out.w + (x - x0)] = packPixel(surface.pixel(x, y), eraser);
         }
     }
     return true;
+}
+
+// ---- traço ao vivo ----
+
+bool liveBegin(const char* id, float sheetW, float sheetH, float radius, float cr, float cg, float cb, uint32_t seed,
+               bool eraser, float x, float y, float pressure, Image& dirty) {
+    if (id == nullptr || sheetW < 1.f || sheetH < 1.f) return false;
+    std::lock_guard<std::mutex> lock(g_mutex);
+    g_live.reset();
+    std::unique_ptr<ab::Brush> brush = ab::BrushLibrary::instance().create(id);
+    if (!brush) return false;
+
+    auto s = std::make_unique<LiveSession>();
+    float scale = 1.f;
+    if (static_cast<double>(sheetW) * sheetH > kMaxPixels) scale = static_cast<float>(std::sqrt(kMaxPixels / (static_cast<double>(sheetW) * sheetH)));
+    const int W = std::max(2, static_cast<int>(std::ceil(sheetW * scale)));
+    const int H = std::max(2, static_cast<int>(std::ceil(sheetH * scale)));
+    s->scale = scale;
+    s->eraser = eraser;
+    s->surface = std::make_unique<TrackingSurface>(W, H);
+    if (eraser) s->surface->clear(ab::Color{0, 0, 0, 1});
+    s->sp.color = eraser ? ab::Color{0, 0, 0, 1} : ab::Color{cr, cg, cb, 1};
+    s->sp.size = std::max(0.3f, radius) * scale;
+    s->sp.opacity = 1.f;
+    s->sp.seed = seed;
+    s->brush = std::move(brush);
+    s->brush->begin(*s->surface, s->sp, liveSample(*s, x, y, pressure, kDt));
+    s->started = true;
+    const bool any = takeDirtyImage(*s, dirty);
+    g_live = std::move(s);
+    return any;
+}
+
+bool liveMove(float x, float y, float pressure, float dtSeconds, Image& dirty) {
+    std::lock_guard<std::mutex> lock(g_mutex);
+    if (!g_live || !g_live->started || g_live->ended) return false;
+    g_live->brush->move(*g_live->surface, liveSample(*g_live, x, y, pressure, dtSeconds));
+    return takeDirtyImage(*g_live, dirty);
+}
+
+bool liveEnd(Image& dirty) {
+    std::lock_guard<std::mutex> lock(g_mutex);
+    if (!g_live) return false;
+    bool any = false;
+    if (g_live->started && !g_live->ended) {
+        g_live->brush->end(*g_live->surface);
+        g_live->ended = true;
+        any = takeDirtyImage(*g_live, dirty);
+    }
+    g_live.reset();
+    return any;
+}
+
+void liveCancel() {
+    std::lock_guard<std::mutex> lock(g_mutex);
+    g_live.reset();
 }
 
 }  // namespace abridge
@@ -145,6 +288,10 @@ bool available() { return false; }
 bool init(const uint8_t*, size_t) { return false; }
 std::string catalog() { return "{\"brushes\":[]}"; }
 bool render(const char*, const float*, int, float, float, float, float, uint32_t, bool, Image&) { return false; }
+bool liveBegin(const char*, float, float, float, float, float, float, uint32_t, bool, float, float, float, Image&) { return false; }
+bool liveMove(float, float, float, float, Image&) { return false; }
+bool liveEnd(Image&) { return false; }
+void liveCancel() {}
 }  // namespace abridge
 
 #endif
