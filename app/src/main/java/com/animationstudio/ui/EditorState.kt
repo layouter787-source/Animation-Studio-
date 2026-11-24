@@ -86,7 +86,7 @@ internal class EditorState(initial: Project) {
     val activePoints = mutableStateListOf<Point>()
     var busyFill by mutableStateOf(false)
 
-    // ---- laço: seleção flutuante em pixels ----
+    // ---- laço: seleção flutuante em píxeis ----
     var lassoShape by mutableStateOf(LassoShape.FREE)
     var floating by mutableStateOf<ImageData?>(null)
     /** Transformação em perspetiva: 4 cantos (TL, TR, BR, BL) da seleção; null = transformação normal. */
@@ -127,7 +127,9 @@ internal class EditorState(initial: Project) {
     fun makeStroke(points: List<Point>): BrushStroke {
         val p = BrushLibrary.byId(presetIdOf(tool))
         val erase = tool == Tool.ERASER
-        val smooth = StrokeSmoothing.smooth(points, smoothing)
+        // Pincéis da AnimBrush: o motor já pintou ao vivo exatamente estes pontos; sem suavização a posteriori o traço
+        // final fica igual ao que se viu (a estabilização, que é causal, continua a valer).
+        val smooth = if (AnimBrushes.find(p.id) != null) points else StrokeSmoothing.smooth(points, smoothing)
         return BrushStroke(smooth, strokeColorArgb(), currentSize, erase, null, p.taper, p.hardness, p.id, if (erase) 0 else drawMode)
     }
 
@@ -144,17 +146,43 @@ internal class EditorState(initial: Project) {
         if (tool == t) return
         commitFloating()
         activePoints.clear()
+        AnimBrushLive.cancel()
         tool = t
         drawMode = 0
     }
 
+    // ---- traço ao vivo do motor C++ (pincéis da AnimBrush) ----
+
+    /** Primeiro ponto do traço: abre a sessão do motor, se o pincel atual é da AnimBrush. [sw] x [sh] = tamanho da folha. */
+    fun liveBegin(p: Point, tMs: Long, sw: Float, sh: Float) {
+        if (!isInkTool) return
+        val abId = AnimBrushes.find(presetIdOf(tool)) ?: return
+        AnimBrushLive.begin(
+            abId, sw, sh, kotlin.math.max(0.3f, currentSize / 2f), strokeColorArgb(), p.x.toBits() * 31 + p.y.toBits(),
+            tool == Tool.ERASER, p.x, p.y, p.p, tMs,
+        )
+    }
+
+    /** Ponto novo do traço, com o instante real do evento da caneta. */
+    fun liveMove(p: Point, tMs: Long) {
+        if (AnimBrushLive.isActive) AnimBrushLive.move(p.x, p.y, p.p, tMs)
+    }
+
+    fun liveCancel() = AnimBrushLive.cancel()
+
     fun commitStroke() {
         val pts = activePoints.toList()
         activePoints.clear()
+        val liveImg = AnimBrushLive.end()
         if (pts.isEmpty() || playing || !isInkTool) return
         val layer = project.layers.firstOrNull { it.id == activeLayerId } ?: return
         if (!layer.visible) return
         val stroke = makeStroke(pts)
+        if (liveImg != null) {
+            // O desenho que o motor calculou ao vivo passa a ser o do traço: fica igual ao que se viu.
+            val abId = AnimBrushes.find(stroke.brush)
+            if (abId != null) attachAbRender(stroke, MyPaintBrushes.dabsWithImage(abId, stroke, liveImg))
+        }
         edit { it.addStroke(activeLayerId, stroke) }
     }
 
