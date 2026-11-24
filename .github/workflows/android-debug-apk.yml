@@ -82,14 +82,25 @@ jobs:
           KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
           KEYSTORE_PASSWORD_SECRET: ${{ secrets.KEYSTORE_PASSWORD }}
           KEY_ALIAS_SECRET: ${{ secrets.KEY_ALIAS }}
-          KEY_PASSWORD_SECRET: ${{ secrets.KEY_PASSWORD }}
         run: |
+          set -euo pipefail
           if [ -n "$KEYSTORE_BASE64" ] && [ -n "$KEYSTORE_PASSWORD_SECRET" ] && [ -n "$KEY_ALIAS_SECRET" ]; then
-            echo "$KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/release.keystore"
+            # Decode without adding a newline; tolerate whitespace introduced during secret entry.
+            printf '%s' "$KEYSTORE_BASE64" | tr -d '[:space:]' | base64 --decode > "$RUNNER_TEMP/release.keystore"
+
+            # Validate store password and alias before Gradle signing.
+            if ! keytool -list -keystore "$RUNNER_TEMP/release.keystore" \
+                -storepass "$KEYSTORE_PASSWORD_SECRET" -alias "$KEY_ALIAS_SECRET" >/dev/null 2>&1; then
+              echo "::error::Cannot open keystore: check KEYSTORE_PASSWORD and KEY_ALIAS GitHub Secrets."
+              exit 1
+            fi
+
             echo "KEYSTORE_PASSWORD=$KEYSTORE_PASSWORD_SECRET" >> "$GITHUB_ENV"
             echo "KEY_ALIAS=$KEY_ALIAS_SECRET" >> "$GITHUB_ENV"
-            echo "KEY_PASSWORD=${KEY_PASSWORD_SECRET:-$KEYSTORE_PASSWORD_SECRET}" >> "$GITHUB_ENV"
-            echo "### Assinatura: chave do repositorio (segredos)" >> "$GITHUB_STEP_SUMMARY"
+            # The keystore was generated without a separate key-password prompt:
+            # the private-key password is the same as the keystore password.
+            echo "KEY_PASSWORD=$KEYSTORE_PASSWORD_SECRET" >> "$GITHUB_ENV"
+            echo "### Assinatura: keystore validada; password da chave igual à da keystore" >> "$GITHUB_STEP_SUMMARY"
           else
             keytool -genkeypair -v -keystore "$RUNNER_TEMP/release.keystore" -alias animationstudio \
               -keyalg RSA -keysize 2048 -validity 10000 -storepass android-temp -keypass android-temp \
