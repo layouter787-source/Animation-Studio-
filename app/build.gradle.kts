@@ -34,14 +34,55 @@ android {
 
     // Assinatura de release: só se o CI (ou o utilizador) definir KEYSTORE_FILE, KEYSTORE_PASSWORD, KEY_ALIAS e KEY_PASSWORD.
     // Sem essas variáveis o release sai sem assinar (app-release-unsigned.apk).
-    val keystorePath: String? = System.getenv("KEYSTORE_FILE")?.takeIf { it.isNotBlank() && File(it).exists() }
+    // Tolerante a erros comuns: espaços/quebras de linha nos segredos, alias com outras maiúsculas (o JKS guarda-os em
+    // minúsculas), alias único na keystore, e palavra-passe da chave igual à da keystore. Escreve no log os aliases que existem.
+    val keystorePath: String? = System.getenv("KEYSTORE_FILE")?.trim()?.takeIf { it.isNotEmpty() && File(it).exists() }
+    val ksPass: String = System.getenv("KEYSTORE_PASSWORD")?.trim() ?: ""
+    var signAlias: String = System.getenv("KEY_ALIAS")?.trim() ?: ""
+    var signKeyPass: String = System.getenv("KEY_PASSWORD")?.trim()?.takeIf { it.isNotEmpty() } ?: ksPass
+    if (keystorePath != null) {
+        val ks = listOf("PKCS12", "JKS").firstNotNullOfOrNull { type ->
+            try {
+                java.security.KeyStore.getInstance(type).also { k -> File(keystorePath).inputStream().use { k.load(it, ksPass.toCharArray()) } }
+            } catch (e: Exception) {
+                null
+            }
+        }
+        if (ks == null) {
+            project.logger.warn("ASSINATURA: não foi possível abrir a keystore (formato inválido ou KEYSTORE_PASSWORD errada).")
+        } else {
+            val aliases = ks.aliases().toList()
+            project.logger.lifecycle("ASSINATURA: aliases na keystore = $aliases; KEY_ALIAS pedido tem ${signAlias.length} caracteres")
+            val match = aliases.firstOrNull { it == signAlias } ?: aliases.firstOrNull { it.equals(signAlias, ignoreCase = true) }
+            if (match != null) {
+                signAlias = match
+            } else if (aliases.size == 1) {
+                project.logger.warn("ASSINATURA: KEY_ALIAS não existe; a usar o único alias da keystore (${aliases[0]}).")
+                signAlias = aliases[0]
+            } else {
+                project.logger.warn("ASSINATURA: KEY_ALIAS não existe e há vários aliases: $aliases")
+            }
+            val keyOk = try { ks.getKey(signAlias, signKeyPass.toCharArray()) != null } catch (e: Exception) { false }
+            if (!keyOk && signKeyPass != ksPass) {
+                val ok2 = try { ks.getKey(signAlias, ksPass.toCharArray()) != null } catch (e: Exception) { false }
+                if (ok2) {
+                    project.logger.warn("ASSINATURA: KEY_PASSWORD não abre a chave; a usar a KEYSTORE_PASSWORD.")
+                    signKeyPass = ksPass
+                } else {
+                    project.logger.warn("ASSINATURA: nem KEY_PASSWORD nem KEYSTORE_PASSWORD abrem a chave '$signAlias'.")
+                }
+            } else if (!keyOk) {
+                project.logger.warn("ASSINATURA: a palavra-passe não abre a chave '$signAlias'.")
+            }
+        }
+    }
     signingConfigs {
         if (keystorePath != null) {
             create("release") {
                 storeFile = File(keystorePath)
-                storePassword = System.getenv("KEYSTORE_PASSWORD")
-                keyAlias = System.getenv("KEY_ALIAS")
-                keyPassword = System.getenv("KEY_PASSWORD")
+                storePassword = ksPass
+                keyAlias = signAlias
+                keyPassword = signKeyPass
             }
         }
     }
