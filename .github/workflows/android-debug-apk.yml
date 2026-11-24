@@ -87,28 +87,62 @@ jobs:
           if [ -n "$KEYSTORE_BASE64" ] && [ -n "$KEYSTORE_PASSWORD_SECRET" ] && [ -n "$KEY_ALIAS_SECRET" ]; then
             # Decode without adding a newline; tolerate whitespace introduced during secret entry.
             printf '%s' "$KEYSTORE_BASE64" | tr -d '[:space:]' | base64 --decode > "$RUNNER_TEMP/release.keystore"
+            test -s "$RUNNER_TEMP/release.keystore"
 
-            # Validate store password and alias before Gradle signing.
+            # First validate the file + store password independently from the alias.
             if ! keytool -list -keystore "$RUNNER_TEMP/release.keystore" \
-                -storepass "$KEYSTORE_PASSWORD_SECRET" -alias "$KEY_ALIAS_SECRET" >/dev/null 2>&1; then
-              echo "::error::Cannot open keystore: check KEYSTORE_PASSWORD and KEY_ALIAS GitHub Secrets."
+                -storepass "$KEYSTORE_PASSWORD_SECRET" > "$RUNNER_TEMP/keystore-list.txt" 2> "$RUNNER_TEMP/keystore-error.txt"; then
+              echo "::error::Keystore could not be opened. The decoded file may be invalid, or KEYSTORE_PASSWORD does not match it."
+              sed -n '1,3p' "$RUNNER_TEMP/keystore-error.txt"
               exit 1
             fi
 
+            # Get private-key aliases from the validated keystore; never print passwords or encoded data.
+            mapfile -t PRIVATE_KEY_ALIASES < <(awk -F, '/PrivateKeyEntry/ { gsub(/^[[:space:]]+|[[:space:]]+$/, "", $1); print $1 }' "$RUNNER_TEMP/keystore-list.txt")
+            REQUESTED_ALIAS="$(printf '%s' "$KEY_ALIAS_SECRET" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+            SELECTED_ALIAS=""
+
+            for candidate in "${PRIVATE_KEY_ALIASES[@]}"; do
+              if [ "$candidate" = "$REQUESTED_ALIAS" ] || [ "${candidate,,}" = "${REQUESTED_ALIAS,,}" ]; then
+                SELECTED_ALIAS="$candidate"
+                break
+              fi
+            done
+
+            # If the keystore contains exactly one signing key, select it even if KEY_ALIAS has a typo.
+            if [ -z "$SELECTED_ALIAS" ] && [ "${#PRIVATE_KEY_ALIASES[@]}" -eq 1 ]; then
+              SELECTED_ALIAS="${PRIVATE_KEY_ALIASES[0]}"
+              echo "::warning::KEY_ALIAS did not match; using the only private-key alias found in the keystore."
+            fi
+
+            if [ -z "$SELECTED_ALIAS" ]; then
+              echo "::error::Store password is valid, but KEY_ALIAS does not identify one unique private key."
+              echo "Available private-key aliases:"
+              printf ' - %s\n' "${PRIVATE_KEY_ALIASES[@]}"
+              exit 1
+            fi
+
+            # Confirm that the selected alias is usable before handing it to Gradle.
+            keytool -list -keystore "$RUNNER_TEMP/release.keystore" \
+              -storepass "$KEYSTORE_PASSWORD_SECRET" -alias "$SELECTED_ALIAS" >/dev/null
+
             echo "KEYSTORE_PASSWORD=$KEYSTORE_PASSWORD_SECRET" >> "$GITHUB_ENV"
-            echo "KEY_ALIAS=$KEY_ALIAS_SECRET" >> "$GITHUB_ENV"
-            # The keystore was generated without a separate key-password prompt:
-            # the private-key password is the same as the keystore password.
+            echo "KEY_ALIAS=$SELECTED_ALIAS" >> "$GITHUB_ENV"
+            # This keystore was created without a separate key-password prompt.
             echo "KEY_PASSWORD=$KEYSTORE_PASSWORD_SECRET" >> "$GITHUB_ENV"
-            echo "### Assinatura: keystore validada; password da chave igual à da keystore" >> "$GITHUB_STEP_SUMMARY"
-          else
+            echo "### Assinatura: keystore aberta; alias privado validado" >> "$GITHUB_STEP_SUMMARY"
+          elif [ -z "$KEYSTORE_BASE64" ] && [ -z "$KEYSTORE_PASSWORD_SECRET" ] && [ -z "$KEY_ALIAS_SECRET" ]; then
+            # Temporary signing is allowed only when no signing secrets were configured at all.
             keytool -genkeypair -v -keystore "$RUNNER_TEMP/release.keystore" -alias animationstudio \
               -keyalg RSA -keysize 2048 -validity 10000 -storepass android-temp -keypass android-temp \
               -dname "CN=Animation Studio, O=Animation Studio, C=AO"
             echo "KEYSTORE_PASSWORD=android-temp" >> "$GITHUB_ENV"
             echo "KEY_ALIAS=animationstudio" >> "$GITHUB_ENV"
             echo "KEY_PASSWORD=android-temp" >> "$GITHUB_ENV"
-            echo "### Assinatura: chave TEMPORARIA (sem segredos configurados). Muda a cada build." >> "$GITHUB_STEP_SUMMARY"
+            echo "### Assinatura: chave TEMPORARIA (nenhum segredo configurado). Muda a cada build." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "::error::Signing secrets are incomplete. Configure KEYSTORE_BASE64, KEYSTORE_PASSWORD and KEY_ALIAS together."
+            exit 1
           fi
           echo "KEYSTORE_FILE=$RUNNER_TEMP/release.keystore" >> "$GITHUB_ENV"
 
