@@ -777,17 +777,20 @@ fun AnimationEditor(meta: ProjectMeta, initial: Project, store: ProjectStore, on
                                 val downPos = down.position
                                 var lastScreen = downPos
                                 var lastRawS = Point(downPos.x, downPos.y)
+                                // Pressão real do ponteiro (caneta). Os pontos intermediários do Compose não trazem pressão: interpolam-se entre as duas leituras reais vizinhas.
+                                var curP = down.pressure.coerceIn(0f, 1f)
+                                var lastP = curP
                                 val startProj = st.view.screenToProject(Point(downPos.x, downPos.y))
 
                                 fun pushPoint(p: Point) {
                                     val last = st.activePoints.lastOrNull()
-                                    if (last == null || hypot(p.x - last.x, p.y - last.y) >= 0.2f / st.view.scale) st.activePoints.add(p)
+                                    if (last == null || hypot(p.x - last.x, p.y - last.y) >= 0.2f / st.view.scale) st.activePoints.add(p.copy(p = curP))
                                 }
 
                                 st.activePoints.clear()
                                 if (drawing) {
                                     val first = if (stab != null) stab.start(lastRawS, down.uptimeMillis) else lastRawS
-                                    st.activePoints.add(st.view.screenToProject(first))
+                                    st.activePoints.add(st.view.screenToProject(first).copy(p = curP))
                                 }
                                 down.consume()
                                 do {
@@ -843,12 +846,17 @@ fun AnimationEditor(meta: ProjectMeta, initial: Project, store: ProjectStore, on
                                             if (drawing && !multi) {
                                                 if (stab != null) {
                                                     // Estabiliza em pixels de ecrã e só depois converte para a folha.
-                                                    for (h in ch.historical) {
+                                                    val newP = ch.pressure.coerceIn(0f, 1f)
+                                                    val hist = ch.historical
+                                                    for ((hi, h) in hist.withIndex()) {
+                                                        curP = lastP + (newP - lastP) * (hi + 1) / (hist.size + 1)
                                                         lastRawS = Point(h.position.x, h.position.y)
                                                         pushPoint(st.view.screenToProject(stab.next(lastRawS, h.uptimeMillis)))
                                                     }
+                                                    curP = newP
                                                     lastRawS = Point(ch.position.x, ch.position.y)
                                                     pushPoint(st.view.screenToProject(stab.next(lastRawS, ch.uptimeMillis)))
+                                                    lastP = newP
                                                 } else {
                                                     // Laço: sempre contorno livre desenhado com o dedo.
                                                     pushPoint(st.view.screenToProject(Point(ch.position.x, ch.position.y)))
