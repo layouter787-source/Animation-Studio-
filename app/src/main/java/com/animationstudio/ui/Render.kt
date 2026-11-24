@@ -1114,7 +1114,13 @@ internal fun DrawScope.drawInk(s: BrushStroke, tint: Color?, useCache: Boolean) 
     }
     val b = s.bounds() ?: return
     val pad = s.width + 2f
-    val rect = Rect(b.minX - pad, b.minY - pad, b.maxX + pad, b.maxY + pad)
+    var rect = Rect(b.minX - pad, b.minY - pad, b.maxX + pad, b.maxY + pad)
+    // Os pincéis da AnimBrush pintam muito fora do caminho (copas, ramos, brilho): a camada tem de cobrir a imagem toda,
+    // senão o traço sai cortado.
+    val abRect = render.myDabs?.let { MyPaintBrushes.inkRect(it) }
+    if (abRect != null) {
+        rect = Rect(min(rect.left, abRect.left), min(rect.top, abRect.top), max(rect.right, abRect.right), max(rect.bottom, abRect.bottom))
+    }
     val paint = Paint()
     paint.alpha = alpha
     paint.blendMode = layerBlend
@@ -1147,6 +1153,12 @@ private var liveStamped = 0
  * levanta. Com zoom (desenho vetorial) o traço tem poucos toques e desenha-se direto.
  */
 private fun DrawScope.drawLiveStroke(s: BrushStroke, tint: Color?, incremental: Boolean, sw: Int, sh: Int, layerId: Long) {
+    // Pincel da AnimBrush: o motor C++ pinta o traço ao vivo, amostra a amostra (ver AnimBrushLive); aqui só se mostra
+    // o resultado dele, nunca uma linha provisória.
+    if (AnimBrushLive.isActive && AnimBrushes.find(s.brush) != null) {
+        drawAnimBrushLive(s, tint, sw, sh)
+        return
+    }
     val preset = if (s.brush.isNotEmpty()) BrushLibrary.byIdOrNull(s.brush) else null
     val dabBrush = preset != null && CustomBrushes.find(s.brush) == null && (
         BrushDynamics.pencil(preset) != null || BrushDynamics.bristle(preset) > 0f ||
@@ -1419,8 +1431,19 @@ internal fun renderComposite(
     return bmp
 }
 
+/** Guarda em [s] o desenho que o motor já calculou ao vivo: ao levantar a caneta o traço fica exatamente como se viu. */
+internal fun attachAbRender(s: BrushStroke, key: FloatArray) {
+    s.renderCache = InkRender(emptyList(), null, null, 0f, 0f, null, 0f, GrainKind.PAPER, myDabs = key)
+}
+
 /** Pré-visualização de um pincel/borracha: uma onda desenhada com a predefinição indicada. */
 internal fun DrawScope.drawBrushSample(preset: BrushPreset, width: Float, opacity: Float, ink: Color) {
+    val abId = AnimBrushes.find(preset.id)
+    if (abId != null) {
+        if (preset.kind == BrushKind.ERASER) drawRect(StudioColors.Accent.copy(alpha = 0.85f))
+        drawAnimBrushSample(abId, preset, width, opacity, ink)
+        return
+    }
     val w = size.width
     val h = size.height
     val pad = h * 0.3f
