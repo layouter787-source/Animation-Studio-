@@ -2,6 +2,7 @@ import java.awt.Color
 import java.awt.RenderingHints
 import java.awt.image.BufferedImage
 import java.io.ByteArrayInputStream
+import java.security.KeyStore
 import java.util.Base64
 import javax.imageio.ImageIO
 
@@ -43,7 +44,7 @@ android {
     if (keystorePath != null) {
         val ks = listOf("PKCS12", "JKS").firstNotNullOfOrNull { type ->
             try {
-                java.security.KeyStore.getInstance(type).also { k -> File(keystorePath).inputStream().use { k.load(it, ksPass.toCharArray()) } }
+                KeyStore.getInstance(type).also { k -> File(keystorePath).inputStream().use { k.load(it, ksPass.toCharArray()) } }
             } catch (e: Exception) {
                 null
             }
