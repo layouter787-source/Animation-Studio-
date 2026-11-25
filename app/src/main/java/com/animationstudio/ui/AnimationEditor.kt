@@ -3,6 +3,7 @@ package com.animationstudio.ui
 import android.content.Context
 import android.graphics.BitmapFactory
 import android.net.Uri
+import android.os.SystemClock
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -782,15 +783,22 @@ fun AnimationEditor(meta: ProjectMeta, initial: Project, store: ProjectStore, on
                                 var lastP = curP
                                 val startProj = st.view.screenToProject(Point(downPos.x, downPos.y))
 
-                                fun pushPoint(p: Point) {
+                                // [tMs] = instante real do evento da caneta: o motor da AnimBrush usa-o como tempo entre amostras.
+                                fun pushPoint(p: Point, tMs: Long) {
                                     val last = st.activePoints.lastOrNull()
-                                    if (last == null || hypot(p.x - last.x, p.y - last.y) >= 0.2f / st.view.scale) st.activePoints.add(p.copy(p = curP))
+                                    if (last == null || hypot(p.x - last.x, p.y - last.y) >= 0.2f / st.view.scale) {
+                                        val q = p.copy(p = curP)
+                                        st.activePoints.add(q)
+                                        if (inkTool) st.liveMove(q, tMs)
+                                    }
                                 }
 
                                 st.activePoints.clear()
                                 if (drawing) {
                                     val first = if (stab != null) stab.start(lastRawS, down.uptimeMillis) else lastRawS
-                                    st.activePoints.add(st.view.screenToProject(first).copy(p = curP))
+                                    val firstPoint = st.view.screenToProject(first).copy(p = curP)
+                                    st.activePoints.add(firstPoint)
+                                    if (inkTool) st.liveBegin(firstPoint, down.uptimeMillis, sw, sh)
                                 }
                                 down.consume()
                                 do {
@@ -798,7 +806,7 @@ fun AnimationEditor(meta: ProjectMeta, initial: Project, store: ProjectStore, on
                                     val penDown = event.changes.any { it.pressed && isPen(it) }
                                     // Rejeição de palma: se a caneta aparece, o toque que começou antes é ignorado.
                                     if (st.palmReject && !downIsPen && penDown) {
-                                        if (drawing) { drawing = false; st.activePoints.clear() }
+                                        if (drawing) { drawing = false; st.activePoints.clear(); st.liveCancel() }
                                         rejected = true
                                     }
                                     if (rejected) {
@@ -809,7 +817,7 @@ fun AnimationEditor(meta: ProjectMeta, initial: Project, store: ProjectStore, on
                                     val pressedCount = changes.count { it.pressed }
                                     if (pressedCount >= 2) {
                                         multi = true
-                                        if (drawing) { drawing = false; st.activePoints.clear() }
+                                        if (drawing) { drawing = false; st.activePoints.clear(); st.liveCancel() }
                                     }
                                     val navigating = pressedCount >= 2 || (navOnly && pressedCount >= 1)
                                     if (navigating) {
@@ -851,15 +859,15 @@ fun AnimationEditor(meta: ProjectMeta, initial: Project, store: ProjectStore, on
                                                     for ((hi, h) in hist.withIndex()) {
                                                         curP = lastP + (newP - lastP) * (hi + 1) / (hist.size + 1)
                                                         lastRawS = Point(h.position.x, h.position.y)
-                                                        pushPoint(st.view.screenToProject(stab.next(lastRawS, h.uptimeMillis)))
+                                                        pushPoint(st.view.screenToProject(stab.next(lastRawS, h.uptimeMillis)), h.uptimeMillis)
                                                     }
                                                     curP = newP
                                                     lastRawS = Point(ch.position.x, ch.position.y)
-                                                    pushPoint(st.view.screenToProject(stab.next(lastRawS, ch.uptimeMillis)))
+                                                    pushPoint(st.view.screenToProject(stab.next(lastRawS, ch.uptimeMillis)), ch.uptimeMillis)
                                                     lastP = newP
                                                 } else {
                                                     // Laço: sempre contorno livre desenhado com o dedo.
-                                                    pushPoint(st.view.screenToProject(Point(ch.position.x, ch.position.y)))
+                                                    pushPoint(st.view.screenToProject(Point(ch.position.x, ch.position.y)), ch.uptimeMillis)
                                                 }
                                             } else if (floatMode != 0 && !multi) {
                                                 val fl = st.floating
@@ -915,7 +923,8 @@ fun AnimationEditor(meta: ProjectMeta, initial: Project, store: ProjectStore, on
                                 } while (event.changes.any { it.pressed })
 
                                 if (drawing && stab != null) {
-                                    for (p in stab.finish(lastRawS)) pushPoint(st.view.screenToProject(p))
+                                    val endT = SystemClock.uptimeMillis()
+                                    for (p in stab.finish(lastRawS)) pushPoint(st.view.screenToProject(p), endT)
                                     st.commitStroke()
                                 } else if (drawing && lassoDraw) {
                                     val poly = st.activePoints.toList()
@@ -925,6 +934,7 @@ fun AnimationEditor(meta: ProjectMeta, initial: Project, store: ProjectStore, on
                                     requestFill(startProj)
                                 } else {
                                     st.activePoints.clear()
+                                    st.liveCancel()
                                 }
                             }
                         }
