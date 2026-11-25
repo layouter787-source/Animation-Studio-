@@ -45,4 +45,7 @@ bool liveMove(float x, float y, float pressure, float dtSeconds, Image& dirty);
 bool liveEnd(Image& dirty);
 void liveCancel();
 
+/** Regista os pincéis realistas próprios (ramo com folhas, folhas soltas, grama) na biblioteca. Idempotente. */
+void registerRealBrushes();
+
 }  // namespace abridge

@@ -9,7 +9,7 @@ project(animationstudio C CXX)
 # ---------------------------------------------------------------------------------------------
 get_filename_component(ANIMBRUSH_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../../../../third_party/AnimBrush" ABSOLUTE)
 
-add_library(animation_engine SHARED native-lib.cpp animbrush_core.cpp animbrush_jni.cpp)
+add_library(animation_engine SHARED native-lib.cpp animbrush_core.cpp animbrush_real.cpp animbrush_jni.cpp)
 set_target_properties(animation_engine PROPERTIES CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON)
 target_include_directories(animation_engine PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
 
