@@ -202,6 +202,27 @@ val copyAnimBrushPack by tasks.registering(Copy::class) {
     onlyIf { pack.exists() }
 }
 
+// Testes JVM do núcleo C++: compila o núcleo (modelo do projeto + ponte JNI) para o computador que corre os testes e
+// diz à JVM onde o encontrar. Precisa de g++ e dos cabeçalhos JNI do JDK (existem nos executores do CI).
+val buildHostStudio by tasks.registering(Exec::class) {
+    val src = file("src/main/cpp")
+    val out = layout.buildDirectory.file("host/libstudio_host.so")
+    val javaHome = System.getProperty("java.home")
+    inputs.files(fileTree(src) { include("studio_*.hpp", "studio_jni.cpp") })
+    outputs.file(out)
+    doFirst { out.get().asFile.parentFile.mkdirs() }
+    commandLine(
+        "g++", "-std=c++17", "-O1", "-shared", "-fPIC",
+        "-I$javaHome/include", "-I$javaHome/include/linux", "-I${src.absolutePath}",
+        "${src.absolutePath}/studio_jni.cpp", "-o", out.get().asFile.absolutePath,
+    )
+}
+
+tasks.withType<Test>().configureEach {
+    dependsOn(buildHostStudio)
+    systemProperty("studio.native.path", layout.buildDirectory.file("host/libstudio_host.so").get().asFile.absolutePath)
+}
+
 tasks.named("preBuild") {
     dependsOn(generateLauncherIcon)
     dependsOn(copyAnimBrushPack)
