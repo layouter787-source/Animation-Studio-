@@ -5,8 +5,10 @@
 #include <cmath>
 #include <memory>
 #include <mutex>
+#include <vector>
 
 #include "animbrush/animbrush.hpp"
+#include "animbrush_path.hpp"
 
 namespace abridge {
 namespace {
@@ -66,6 +68,8 @@ struct LiveSession {
     bool started = false;
     bool ended = false;
     ab::StrokeParams sp;
+    PathFilter filter;               // dinâmica do traço: suavização, pressão, curva
+    std::vector<PathSample> pending; // amostras já suavizadas à espera de irem para o pincel
 };
 std::unique_ptr<LiveSession> g_live;
 
@@ -118,27 +122,52 @@ ab::InputSample liveSample(const LiveSession& s, float x, float y, float pressur
     in.dt = std::min(0.1f, std::max(0.001f, dt));  // tempo real entre amostras, limitado a valores sãos
     return in;
 }
+
+/** Dinâmica por tipo de pincel: os de tinta/pressão alisam mais o caminho e a pressão; os de carimbo/efeitos menos. */
+PathConfig pathConfigFor(const ab::Brush& b) {
+    PathConfig c;
+    const bool pressure = b.info().needsPressure;
+    c.streamline = pressure ? 0.22f : 0.12f;
+    c.pressureSmoothing = pressure ? 0.3f : 0.f;
+    c.chord = 3.f;
+    return c;
+}
+
+/** A biblioteca com os pincéis realistas já registados (idempotente: vale qualquer ordem de arranque). */
+ab::BrushLibrary& library() {
+    registerRealBrushes();
+    return ab::BrushLibrary::instance();
+}
+
+ab::InputSample sampleOf(const PathSample& p) {
+    ab::InputSample in;
+    in.x = p.x;
+    in.y = p.y;
+    in.pressure = std::min(1.f, std::max(0.05f, p.pressure));
+    in.dt = std::min(0.1f, std::max(0.0005f, p.dt));
+    return in;
+}
 }  // namespace
 
 bool available() { return true; }
 
 bool init(const uint8_t* data, size_t size) {
     std::lock_guard<std::mutex> lock(g_mutex);
-    ab::BrushLibrary::instance();
+    library();
     if (data == nullptr || size == 0) return false;
     return ab::StampBank::instance().loadPackFromMemory(data, size);
 }
 
 std::string catalog() {
     std::lock_guard<std::mutex> lock(g_mutex);
-    return ab::BrushLibrary::instance().catalogJson();
+    return library().catalogJson();
 }
 
 bool render(const char* id, const float* pts, int count, float radius, float cr, float cg, float cb, uint32_t seed,
             bool eraser, Image& out) {
     if (id == nullptr || pts == nullptr || count < 1) return false;
     std::lock_guard<std::mutex> lock(g_mutex);
-    std::unique_ptr<ab::Brush> brush = ab::BrushLibrary::instance().create(id);
+    std::unique_ptr<ab::Brush> brush = library().create(id);
     if (!brush) return false;
 
     float minx = pts[0], maxx = pts[0], miny = pts[1], maxy = pts[1];
@@ -187,7 +216,18 @@ bool render(const char* id, const float* pts, int count, float radius, float cr,
     if (count == 1) {
         brush->move(surface, sample(0));
     } else {
-        for (int i = 1; i < count; ++i) brush->move(surface, sample(i));
+        PathFilter filter;
+        std::vector<PathSample> out;
+        const ab::InputSample f = sample(0);
+        filter.start(pathConfigFor(*brush), f.x, f.y, f.pressure);
+        for (int i = 1; i < count; ++i) {
+            const ab::InputSample in = sample(i);
+            filter.add(in.x, in.y, in.pressure, in.dt, out);
+            for (const PathSample& p : out) brush->move(surface, sampleOf(p));
+            out.clear();
+        }
+        filter.finish(out);
+        for (const PathSample& p : out) brush->move(surface, sampleOf(p));
     }
     brush->end(surface);
 
@@ -230,7 +270,7 @@ bool liveBegin(const char* id, float sheetW, float sheetH, float radius, float c
     if (id == nullptr || sheetW < 1.f || sheetH < 1.f) return false;
     std::lock_guard<std::mutex> lock(g_mutex);
     g_live.reset();
-    std::unique_ptr<ab::Brush> brush = ab::BrushLibrary::instance().create(id);
+    std::unique_ptr<ab::Brush> brush = library().create(id);
     if (!brush) return false;
 
     auto s = std::make_unique<LiveSession>();
@@ -247,7 +287,9 @@ bool liveBegin(const char* id, float sheetW, float sheetH, float radius, float c
     s->sp.opacity = 1.f;
     s->sp.seed = seed;
     s->brush = std::move(brush);
-    s->brush->begin(*s->surface, s->sp, liveSample(*s, x, y, pressure, kDt));
+    const ab::InputSample first = liveSample(*s, x, y, pressure, kDt);
+    s->filter.start(pathConfigFor(*s->brush), first.x, first.y, first.pressure);
+    s->brush->begin(*s->surface, s->sp, first);
     s->started = true;
     const bool any = takeDirtyImage(*s, dirty);
     g_live = std::move(s);
@@ -257,7 +299,10 @@ bool liveBegin(const char* id, float sheetW, float sheetH, float radius, float c
 bool liveMove(float x, float y, float pressure, float dtSeconds, Image& dirty) {
     std::lock_guard<std::mutex> lock(g_mutex);
     if (!g_live || !g_live->started || g_live->ended) return false;
-    g_live->brush->move(*g_live->surface, liveSample(*g_live, x, y, pressure, dtSeconds));
+    const ab::InputSample in = liveSample(*g_live, x, y, pressure, dtSeconds);
+    g_live->pending.clear();
+    g_live->filter.add(in.x, in.y, in.pressure, in.dt, g_live->pending);
+    for (const PathSample& p : g_live->pending) g_live->brush->move(*g_live->surface, sampleOf(p));
     return takeDirtyImage(*g_live, dirty);
 }
 
@@ -266,6 +311,9 @@ bool liveEnd(Image& dirty) {
     if (!g_live) return false;
     bool any = false;
     if (g_live->started && !g_live->ended) {
+        g_live->pending.clear();
+        g_live->filter.finish(g_live->pending);  // o caminho chega ao último ponto real
+        for (const PathSample& p : g_live->pending) g_live->brush->move(*g_live->surface, sampleOf(p));
         g_live->brush->end(*g_live->surface);
         g_live->ended = true;
         any = takeDirtyImage(*g_live, dirty);
