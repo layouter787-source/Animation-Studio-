@@ -1,17 +1,15 @@
 package com.animationstudio.domain
 
 /**
- * Edições de elementos do desenho atual de uma camada (balde, laço). Ficam fora de [Project]
- * para não alterar a classe já testada; usam apenas membros públicos.
+ * Edições de elementos do desenho atual de uma camada (balde, laço). O C++ guarda a lista de traços do desenho do
+ * frame atual; aqui só se calcula a lista nova.
  */
-private fun Project.replaceLayer(id: Long, f: (Layer) -> Layer): Project =
-    copy(layers = layers.map { if (it.id == id) f(it) else it })
-
 private fun Project.updateCurrentStrokes(layerId: Long, f: (List<BrushStroke>) -> List<BrushStroke>): Project {
     val layer = layers.firstOrNull { it.id == layerId } ?: return this
     val d = layer.drawingAt(currentFrameId) ?: return this
     val updated = f(d.strokes)
-    return replaceLayer(layerId) { it.copy(drawings = it.drawings + (d.id to d.copy(strokes = updated))) }
+    val ids = LongArray(updated.size) { StrokeRegistry.idOf(updated[it]) }
+    return fenced { Project.of(NativeStudio.nSetCurrentStrokes(handle, layerId, ids)) }
 }
 
 /**

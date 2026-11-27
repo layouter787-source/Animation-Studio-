@@ -6,28 +6,17 @@ package com.animationstudio.domain
  * frame vizinho anterior (ou do primeiro, se inserido no início).
  */
 fun Project.insertFrameAt(position: Int, content: Map<Long, List<BrushStroke>> = emptyMap()): Project {
-    val pos = position.coerceIn(0, frameIds.size)
-    val newId = nextId
-    var counter = nextId + 1
-    val neighbor = frameIds[(pos - 1).coerceAtLeast(0).coerceAtMost(frameIds.lastIndex)]
-    val newLayers = layers.map { l ->
-        if (l.kind == LayerKind.SCENERY) {
-            val shared = l.cels[neighbor]
-            if (shared != null) l.copy(cels = l.cels + (newId to shared)) else l
-        } else {
-            val strokes = content[l.id]
-            if (strokes.isNullOrEmpty()) {
-                l
-            } else {
-                val d = Drawing(counter, strokes)
-                counter += 1
-                l.copy(drawings = l.drawings + (d.id to d), cels = l.cels + (newId to d.id))
-            }
-        }
+    val layerIds = ArrayList<Long>()
+    val counts = ArrayList<Int>()
+    val strokeIds = ArrayList<Long>()
+    for ((layerId, strokes) in content) {
+        layerIds.add(layerId)
+        counts.add(strokes.size)
+        for (s in strokes) strokeIds.add(StrokeRegistry.idOf(s))
     }
-    val ids = frameIds.toMutableList()
-    ids.add(pos, newId)
-    return Project(ids, newLayers, pos, counter)
+    return fenced {
+        Project.of(NativeStudio.nInsertFrameAt(handle, position, layerIds.toLongArray(), counts.toIntArray(), strokeIds.toLongArray()))
+    }
 }
 
 /** Conteúdo copiável de um frame: traços das camadas de desenho. O cenário é partilhado e não entra na cópia. */
