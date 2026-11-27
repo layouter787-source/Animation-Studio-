@@ -1,56 +1,85 @@
 package com.animationstudio.domain
 
-import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotSame
+import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
-/** Prova a ponte Kotlin -> JNI -> C++ do núcleo do projeto (a lógica em si é testada em C++ e espelha ProjectTest). */
+/** Prova a ponte Kotlin -> JNI -> C++ do núcleo do projeto e o registo de traços (a lógica em si é testada em C++). */
 class NativeStudioTest {
-    private val n = NativeStudio
+    private fun stroke(x: Float) = BrushStroke(listOf(Point(x, x)), 0xFF000000.toInt(), 4f)
 
-    private fun drawingLayer(h: Long): Long = n.nLayerInfo(h, 1)[0]
-
-    @Test fun initialProjectHasSceneryAndDrawingLayer() {
-        val p = n.nInitial()
-        assertEquals(1, n.nFrameCount(p))
-        assertEquals(2, n.nLayerCount(p))
-        assertEquals(1L, n.nLayerInfo(p, 0)[1])
-        assertEquals("Camada 1", n.nLayerName(p, 1))
-        n.nFree(p)
+    @Test fun editsReturnNewProjectsAndKeepTheOldOneIntact() {
+        val p = Project.initial()
+        val s = stroke(1f)
+        val q = p.addStroke(2L, s)
+        assertEquals(0, p.strokesAt(2L, 0).size)
+        assertEquals(1, q.strokesAt(2L, 0).size)
+        assertSame(s, q.strokesAt(2L, 0)[0])
     }
 
-    @Test fun editsReturnNewHandlesAndKeepTheOldOneIntact() {
-        val p = n.nInitial()
-        val dl = drawingLayer(p)
-        val q = n.nAddStroke(p, dl, floatArrayOf(1f, 2f, 3f, 4f), 0xFFFF0000.toInt(), 6f, false, 0.6f, 1f, "ink_g", 0, -1L, -1L)
-        assertEquals(0, n.nStrokeCount(p, dl, 0))
-        assertEquals(1, n.nStrokeCount(q, dl, 0))
-        assertArrayEquals(floatArrayOf(1f, 2f, 3f, 4f), n.nStrokePoints(q, dl, 0, 0), 0f)
-        assertEquals("ink_g", n.nStrokeBrush(q, dl, 0, 0))
-        assertEquals(6.0, n.nStrokeMeta(q, dl, 0, 0)[1], 0.0)
-        n.nFree(p)
-        n.nFree(q)
+    @Test fun noOpEditsReturnTheSameInstance() {
+        val p = Project.initial()
+        assertSame(p, p.addStroke(999L, stroke(1f)))
+        assertSame(p, p.deleteCurrentFrame())
+        assertSame(p, p.renameLayer(2L, "  "))
+        assertSame(p, p.extendHold(0, 0))
+        assertSame(p, p.shrinkHold(0, 3))
+    }
+
+    @Test fun unchangedDrawingsKeepTheSameStrokeListAcrossEdits() {
+        // A cache de imagens por camada compara a lista de traços por identidade: tem de se manter.
+        val a = Project.initial().addStroke(2L, stroke(1f))
+        val listBefore = a.layers.first { it.id == 2L }.drawingAt(0L)!!.strokes
+        val b = a.addLayer(LayerKind.DRAWING).setLayerOpacity(2L, 50)
+        val listAfter = b.layers.first { it.id == 2L }.drawingAt(0L)!!.strokes
+        assertSame(listBefore, listAfter)
+        val c = b.addStroke(2L, stroke(2f))
+        val changed = c.layers.first { it.id == 2L }.drawingAt(0L)!!.strokes
+        assertNotSame(listBefore, changed)
+        assertSame(listBefore[0], changed[0])
+    }
+
+    @Test fun releasedStrokesAreDroppedFromTheRegistry() {
+        val before = StrokeRegistry.sizes()
+        var p: Project? = Project.initial()
+        for (i in 0 until 20) p = p!!.addStroke(2L, stroke(i.toFloat()))
+        assertTrue(StrokeRegistry.sizes().first >= before.first + 20)
+        p!!.layers  // materializa
+        p = null
+        // Sem referências, o finalizador liberta os handles; o registo esvazia na chamada seguinte.
+        for (i in 0 until 20) {
+            System.gc()
+            System.runFinalization()
+            StrokeRegistry.drain()
+        }
+        assertTrue("traços ainda registados: ${StrokeRegistry.sizes()}", StrokeRegistry.sizes().first <= before.first + 2)
     }
 
     @Test fun framesAndHoldWorkThroughTheBridge() {
-        val p = n.nInitial()
-        val dl = drawingLayer(p)
-        val withStroke = n.nAddStroke(p, dl, floatArrayOf(0f, 0f), 0xFF000000.toInt(), 4f, false, 0.6f, 1f, "", 0, -1L, -1L)
-        val held = n.nExtendHold(withStroke, 0, 2)
-        assertEquals(3, n.nFrameCount(held))
-        assertEquals(2, n.nHoldEnd(held, 0))
-        assertTrue(n.nSameExposure(held, 0, 1))
-        val next = n.nAddFrame(withStroke)
-        assertEquals(2, n.nFrameCount(next))
-        assertEquals(1, n.nCurrentFrame(next))
-        listOf(p, withStroke, held, next).forEach { n.nFree(it) }
+        val s = stroke(1f)
+        val withStroke = Project.initial().addStroke(2L, s)
+        val held = withStroke.extendHold(0, 2)
+        assertEquals(3, held.frameCount)
+        assertEquals(2, held.holdEnd(0))
+        assertTrue(held.sameExposure(0, 1))
+        val next = withStroke.addFrameAfterCurrent()
+        assertEquals(2, next.frameCount)
+        assertEquals(1, next.currentFrame)
     }
 
-    @Test fun playbackStepsAndInvalidHandles() {
-        assertEquals(0, n.nNextPlaybackStep(2, 3, 1, 1)[0])
-        assertEquals(1, n.nNextPlaybackStep(2, 3, 0, 1)[2])
-        assertEquals(0, n.nFrameCount(987654321L))
-        assertEquals(0L, n.nAddFrame(987654321L))
+    @Test fun playbackStepsAndRebuildFromParts() {
+        assertEquals(0, NativeStudio.nNextPlaybackStep(2, 3, 1, 1)[0])
+        assertEquals(1, NativeStudio.nNextPlaybackStep(2, 3, 0, 1)[2])
+        val src = Project.initial().addStroke(2L, stroke(3f)).addFrameAfterCurrent()
+        val copy = Project(src.frameIds, src.layers, src.currentFrame, src.nextId)
+        assertEquals(src, copy)
+        assertEquals(src.hashCode(), copy.hashCode())
+        assertTrue(src != src.addFrameAfterCurrent())
+        assertEquals(src.frameIds, copy.frameIds)
+        assertEquals(src.nextId, copy.nextId)
+        assertEquals(src.layers.map { it.name }, copy.layers.map { it.name })
+        assertSame(src.strokesAt(2L, 0)[0], copy.strokesAt(2L, 0)[0])
     }
 }

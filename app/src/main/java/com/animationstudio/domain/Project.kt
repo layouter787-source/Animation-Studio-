@@ -1,5 +1,7 @@
 package com.animationstudio.domain
 
+import java.lang.ref.Reference
+
 enum class LayerKind { DRAWING, SCENERY }
 
 /** Um desenho (conjunto de traços). Pode ser referenciado por vários frames (exposição partilhada). */
@@ -26,95 +28,98 @@ data class Layer(
 }
 
 /**
- * Projeto: frames (ids) + camadas ordenadas de baixo para cima. Imutável e sem dependências Android.
- * Substitui [Timeline] quando a UI migrar para camadas.
+ * Projeto: frames (ids) + camadas ordenadas de baixo para cima. Imutável. Os DADOS E AS REGRAS vivem no C++
+ * (studio_project.hpp); esta classe guarda só o handle e devolve vistas Kotlin só de leitura ([layers], [frameIds]).
+ * Cada edição devolve um projeto novo (ou [this], se nada mudou, como sempre).
  */
-data class Project(
-    val frameIds: List<Long>,
-    val layers: List<Layer>,
-    val currentFrame: Int,
-    val nextId: Long,
-) {
-    init {
-        require(frameIds.isNotEmpty()) { "Precisa de pelo menos um frame" }
-        require(currentFrame in frameIds.indices) { "Frame atual fora dos limites" }
-        require(layers.isNotEmpty()) { "Precisa de pelo menos uma camada" }
-    }
+class Project private constructor(internal val handle: Long) {
+    val frameIds: List<Long> by lazy(LazyThreadSafetyMode.PUBLICATION) { fenced { NativeStudio.nFrameIds(handle).asList() } }
+    val currentFrame: Int by lazy(LazyThreadSafetyMode.PUBLICATION) { fenced { NativeStudio.nCurrentFrame(handle) } }
+    val nextId: Long by lazy(LazyThreadSafetyMode.PUBLICATION) { fenced { NativeStudio.nNextId(handle) } }
+    val layers: List<Layer> by lazy(LazyThreadSafetyMode.PUBLICATION) { fenced { materialize() } }
 
     val frameCount: Int get() = frameIds.size
     val currentFrameId: Long get() = frameIds[currentFrame]
 
+    private val layerInfos: List<LongArray> by lazy(LazyThreadSafetyMode.PUBLICATION) {
+        fenced { List(NativeStudio.nLayerCount(handle)) { NativeStudio.nLayerInfo(handle, it) } }
+    }
+
+    protected fun finalize() {
+        NativeStudio.nFree(handle)
+    }
+
+    /** Igualdade por conteúdo (como a classe de dados que isto substitui). Listas iguais por identidade saem logo. */
+    override fun equals(other: Any?): Boolean {
+        if (this === other) return true
+        if (other !is Project) return false
+        return currentFrame == other.currentFrame && nextId == other.nextId && frameIds == other.frameIds && layers == other.layers
+    }
+
+    override fun hashCode(): Int = (frameIds.hashCode() * 31 + currentFrame) * 31 + nextId.hashCode()
+
+    internal inline fun <T> fenced(block: () -> T): T = try {
+        block()
+    } finally {
+        Reference.reachabilityFence(this)
+    }
+
+    private fun materialize(): List<Layer> {
+        StrokeRegistry.drain()
+        return List(layerInfos.size) { i ->
+            val info = layerInfos[i]
+            val flat = NativeStudio.nLayerDrawings(handle, i)
+            val drawings = LinkedHashMap<Long, Drawing>()
+            var k = 0
+            while (k + 2 < flat.size) {
+                val n = flat[k + 2].toInt()
+                drawings[flat[k]] = StrokeRegistry.drawing(flat[k + 1], flat[k], flat, k + 3, n)
+                k += 3 + n
+            }
+            val cf = NativeStudio.nLayerCels(handle, i)
+            val cels = LinkedHashMap<Long, Long>()
+            var c = 0
+            while (c + 1 < cf.size) {
+                cels[cf[c]] = cf[c + 1]
+                c += 2
+            }
+            Layer(
+                id = info[0],
+                name = NativeStudio.nLayerName(handle, i),
+                kind = if (info[1] == 1L) LayerKind.SCENERY else LayerKind.DRAWING,
+                opacityPercent = info[2].toInt(),
+                visible = info[3] != 0L,
+                drawings = drawings,
+                cels = cels,
+            )
+        }
+    }
+
+    private fun hasLayer(id: Long) = layerInfos.any { it[0] == id }
+
+    private fun derive(newHandle: Long): Project = of(newHandle)
+
     fun strokesAt(layerId: Long, frameIndex: Int): List<BrushStroke> =
         layers.firstOrNull { it.id == layerId }?.drawingAt(frameIds[frameIndex])?.strokes ?: emptyList()
 
-    private fun updateLayer(id: Long, f: (Layer) -> Layer): Project =
-        copy(layers = layers.map { if (it.id == id) f(it) else it })
-
-    fun select(index: Int): Project = copy(currentFrame = index.coerceIn(0, frameIds.lastIndex))
+    fun select(index: Int): Project = fenced { derive(NativeStudio.nSelect(handle, index)) }
 
     /** Acrescenta um traço no frame atual. Num cenário, o primeiro desenho cobre todos os frames sem desenho. */
     fun addStroke(layerId: Long, stroke: BrushStroke): Project {
-        val layer = layers.firstOrNull { it.id == layerId } ?: return this
-        val fid = currentFrameId
-        val existing = layer.drawingAt(fid)
-        if (existing != null) {
-            return updateLayer(layerId) {
-                it.copy(drawings = it.drawings + (existing.id to existing.copy(strokes = existing.strokes + stroke)))
-            }
-        }
-        val fresh = Drawing(nextId, listOf(stroke))
-        val targets = if (layer.kind == LayerKind.SCENERY) frameIds.filter { it !in layer.cels } else listOf(fid)
-        return copy(nextId = nextId + 1).updateLayer(layerId) {
-            it.copy(drawings = it.drawings + (fresh.id to fresh), cels = it.cels + targets.associateWith { fresh.id })
-        }
+        if (!hasLayer(layerId)) return this
+        val sid = StrokeRegistry.idOf(stroke)
+        return fenced { derive(NativeStudio.nAddStroke(handle, layerId, sid)) }
     }
 
     // ---------- frames ----------
 
     /** Novo frame após o atual: camadas de desenho em branco; cenários continuam o desenho do frame atual. */
-    fun addFrameAfterCurrent(): Project {
-        val newId = nextId
-        val cur = currentFrameId
-        val newLayers = layers.map { l ->
-            val shared = if (l.kind == LayerKind.SCENERY) l.cels[cur] else null
-            if (shared != null) l.copy(cels = l.cels + (newId to shared)) else l
-        }
-        val ids = frameIds.toMutableList().apply { add(currentFrame + 1, newId) }
-        return Project(ids, newLayers, currentFrame + 1, nextId + 1)
-    }
+    fun addFrameAfterCurrent(): Project = fenced { derive(NativeStudio.nAddFrame(handle)) }
 
     /** Duplica o frame atual: desenhos copiados de forma independente; cenários partilhados. */
-    fun duplicateCurrentFrame(): Project {
-        val newId = nextId
-        var counter = nextId + 1
-        val cur = currentFrameId
-        val newLayers = layers.map { l ->
-            val src = l.drawingAt(cur)
-            if (src == null) {
-                l
-            } else if (l.kind == LayerKind.SCENERY) {
-                l.copy(cels = l.cels + (newId to src.id))
-            } else {
-                val dup = src.copy(id = counter)
-                counter += 1
-                l.copy(drawings = l.drawings + (dup.id to dup), cels = l.cels + (newId to dup.id))
-            }
-        }
-        val ids = frameIds.toMutableList().apply { add(currentFrame + 1, newId) }
-        return Project(ids, newLayers, currentFrame + 1, counter)
-    }
+    fun duplicateCurrentFrame(): Project = fenced { derive(NativeStudio.nDuplicateFrame(handle)) }
 
-    fun deleteCurrentFrame(): Project {
-        if (frameIds.size == 1) return this
-        val fid = currentFrameId
-        val ids = frameIds.toMutableList().apply { removeAt(currentFrame) }
-        val newLayers = layers.map { l ->
-            val remaining = l.cels - fid
-            val used = remaining.values.toSet()
-            l.copy(cels = remaining, drawings = l.drawings.filterKeys { it in used })
-        }
-        return Project(ids, newLayers, currentFrame.coerceAtMost(ids.lastIndex), nextId)
-    }
+    fun deleteCurrentFrame(): Project = if (frameCount == 1) this else fenced { derive(NativeStudio.nDeleteFrame(handle)) }
 
     /**
      * "Separar a partir deste frame": o frame atual e os seguintes que partilhavam o desenho
@@ -122,78 +127,76 @@ data class Project(
      */
     fun separateSceneryFromCurrent(layerId: Long): Project {
         val layer = layers.firstOrNull { it.id == layerId && it.kind == LayerKind.SCENERY } ?: return this
-        val old = layer.drawingAt(currentFrameId) ?: return this
-        val dup = old.copy(id = nextId)
-        val remapped = layer.cels.toMutableMap()
-        for (i in currentFrame until frameIds.size) {
-            val fid = frameIds[i]
-            if (remapped[fid] == old.id) remapped[fid] = dup.id
-        }
-        return copy(nextId = nextId + 1).updateLayer(layerId) {
-            it.copy(drawings = it.drawings + (dup.id to dup), cels = remapped)
-        }
+        if (layer.drawingAt(currentFrameId) == null) return this
+        return fenced { derive(NativeStudio.nSeparateScenery(handle, layerId)) }
     }
 
     // ---------- camadas ----------
 
     /** Camadas de desenho entram no topo; cenários entram abaixo de todas as camadas de desenho. */
-    fun addLayer(kind: LayerKind): Project {
-        val n = layers.count { it.kind == kind } + 1
-        val name = if (kind == LayerKind.DRAWING) "Camada $n" else "Cenário $n"
-        val layer = Layer(nextId, name, kind)
-        val list = layers.toMutableList()
-        val firstDrawing = list.indexOfFirst { it.kind == LayerKind.DRAWING }
-        val idx = if (kind == LayerKind.SCENERY) (if (firstDrawing < 0) list.size else firstDrawing) else list.size
-        list.add(idx, layer)
-        return copy(layers = list, nextId = nextId + 1)
-    }
+    fun addLayer(kind: LayerKind): Project =
+        fenced { derive(NativeStudio.nAddLayer(handle, if (kind == LayerKind.SCENERY) 1 else 0)) }
 
     /** Duplica a camada com todo o conteúdo, de forma independente, logo acima da original. */
-    fun duplicateLayer(layerId: Long): Project {
-        val i = layers.indexOfFirst { it.id == layerId }
-        if (i < 0) return this
-        val src = layers[i]
-        var counter = nextId + 1
-        val idMap = HashMap<Long, Long>()
-        for (oldId in src.drawings.keys) {
-            idMap[oldId] = counter
-            counter += 1
-        }
-        val dupLayer = Layer(
-            id = nextId,
-            name = "${src.name} cópia",
-            kind = src.kind,
-            opacityPercent = src.opacityPercent,
-            visible = src.visible,
-            drawings = src.drawings.values.associate { d -> idMap.getValue(d.id) to d.copy(id = idMap.getValue(d.id)) },
-            cels = src.cels.mapValues { entry -> idMap.getValue(entry.value) },
-        )
-        val list = layers.toMutableList()
-        list.add(i + 1, dupLayer)
-        return copy(layers = list, nextId = counter)
-    }
+    fun duplicateLayer(layerId: Long): Project =
+        if (!hasLayer(layerId)) this else fenced { derive(NativeStudio.nDuplicateLayer(handle, layerId)) }
 
     fun renameLayer(layerId: Long, name: String): Project =
-        if (name.isBlank()) this else updateLayer(layerId) { it.copy(name = name.trim()) }
+        if (name.isBlank()) this else fenced { derive(NativeStudio.nRenameLayer(handle, layerId, name)) }
 
     fun setLayerOpacity(layerId: Long, percent: Int): Project =
-        updateLayer(layerId) { it.copy(opacityPercent = percent.coerceIn(0, 100)) }
+        fenced { derive(NativeStudio.nSetLayerOpacity(handle, layerId, percent)) }
 
-    fun toggleLayerVisible(layerId: Long): Project = updateLayer(layerId) { it.copy(visible = !it.visible) }
+    fun toggleLayerVisible(layerId: Long): Project = fenced { derive(NativeStudio.nToggleLayerVisible(handle, layerId)) }
 
     fun deleteLayer(layerId: Long): Project =
-        if (layers.size == 1) this else copy(layers = layers.filter { it.id != layerId })
+        if (layerInfos.size == 1) this else fenced { derive(NativeStudio.nDeleteLayer(handle, layerId)) }
+
+    /** Move uma camada [delta] posições na pilha (positivo = para cima, negativo = para baixo). */
+    internal fun moveLayerImpl(layerId: Long, delta: Int): Project {
+        val i = layerInfos.indexOfFirst { it[0] == layerId }
+        if (i < 0) return this
+        val j = (i + delta).coerceIn(0, layerInfos.lastIndex)
+        if (i == j) return this
+        return fenced { derive(NativeStudio.nMoveLayer(handle, layerId, delta)) }
+    }
 
     companion object {
+        internal fun of(handle: Long): Project = Project(handle)
+
         /** Um frame, um cenário (por baixo) e uma camada de desenho (por cima). */
-        fun initial(): Project = Project(
-            frameIds = listOf(0L),
-            layers = listOf(
-                Layer(1, "Cenário 1", LayerKind.SCENERY),
-                Layer(2, "Camada 1", LayerKind.DRAWING),
-            ),
-            currentFrame = 0,
-            nextId = 3,
-        )
+        fun initial(): Project = Project(NativeStudio.nInitial())
     }
+}
+
+/** Monta um projeto a partir de peças (abrir ficheiro, importar). Precisa de pelo menos um frame e uma camada. */
+fun Project(frameIds: List<Long>, layers: List<Layer>, currentFrame: Int, nextId: Long): Project {
+    require(frameIds.isNotEmpty()) { "Precisa de pelo menos um frame" }
+    require(currentFrame in frameIds.indices) { "Frame atual fora dos limites" }
+    require(layers.isNotEmpty()) { "Precisa de pelo menos uma camada" }
+    val layerIdx = LongArray(layers.size) { layers[it].id }
+    val meta = LongArray(layers.size * 3)
+    val drawings = ArrayList<Long>()
+    val cels = ArrayList<Long>()
+    layers.forEachIndexed { i, l ->
+        meta[3 * i] = if (l.kind == LayerKind.SCENERY) 1L else 0L
+        meta[3 * i + 1] = l.opacityPercent.toLong()
+        meta[3 * i + 2] = if (l.visible) 1L else 0L
+        for (d in l.drawings.values) {
+            drawings.add(i.toLong())
+            drawings.add(d.id)
+            drawings.add(d.strokes.size.toLong())
+            for (s in d.strokes) drawings.add(StrokeRegistry.idOf(s))
+        }
+        for ((frameId, drawingId) in l.cels) {
+            cels.add(i.toLong())
+            cels.add(frameId)
+            cels.add(drawingId)
+        }
+    }
+    val h = NativeStudio.nBuild(
+        frameIds.toLongArray(), currentFrame, nextId, layerIdx, meta, Array(layers.size) { layers[it].name },
+        drawings.toLongArray(), cels.toLongArray(),
+    )
+    return Project.of(h)
 }
