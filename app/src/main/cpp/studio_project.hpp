@@ -14,6 +14,8 @@
 #include <utility>
 #include <vector>
 
+#include "studio_tokens.hpp"
+
 namespace studio {
 
 struct Pt {
@@ -33,8 +35,9 @@ struct Stroke {
     int mode = 0;            // 0 normal, 1 só dentro do desenho, 2 por trás
     int64_t fillBlob = -1;   // -1 = sem preenchimento
     int64_t imageBlob = -1;  // -1 = sem imagem
+    std::shared_ptr<const Token> token;  // o conteúdo real do traço vive no Kotlin; esta ficha segura-o enquanto houver cópias
     bool operator==(const Stroke& o) const {
-        return points == o.points && colorArgb == o.colorArgb && width == o.width && erase == o.erase &&
+        return token == o.token && points == o.points && colorArgb == o.colorArgb && width == o.width && erase == o.erase &&
                taper == o.taper && hardness == o.hardness && brush == o.brush && mode == o.mode &&
                fillBlob == o.fillBlob && imageBlob == o.imageBlob;
     }
@@ -44,6 +47,14 @@ struct Stroke {
 struct Drawing {
     int64_t id = 0;
     std::vector<Stroke> strokes;
+    int64_t serial = 0;                           // identidade desta versão do conteúdo (muda sempre que o conteúdo muda)
+    std::shared_ptr<const Token> serialToken;     // liberta o serial quando ninguém mais tem esta versão
+
+    /** Nova versão: o Kotlin guarda a lista de traços por serial e mantém a mesma lista enquanto nada muda. */
+    void touch() {
+        serial = TokenTable::instance().nextSerial();
+        serialToken = TokenTable::instance().acquire(1, serial);
+    }
 };
 using DrawingPtr = std::shared_ptr<const Drawing>;
 
@@ -118,12 +129,14 @@ public:
         if (existing) {
             auto d = std::make_shared<Drawing>(*existing);
             d->strokes.push_back(stroke);
+            d->touch();
             l->drawings[d->id] = d;
             return p;
         }
         auto fresh = std::make_shared<Drawing>();
         fresh->id = p.nextId;
         fresh->strokes.push_back(stroke);
+        fresh->touch();
         p.nextId += 1;
         l->drawings[fresh->id] = fresh;
         if (l->kind == LayerKind::Scenery) {
@@ -166,6 +179,7 @@ public:
             } else {
                 auto dup = std::make_shared<Drawing>(*src);
                 dup->id = counter++;
+                dup->touch();
                 l.drawings[dup->id] = dup;
                 l.cels[newId] = dup->id;
             }
@@ -204,6 +218,7 @@ public:
         Layer* l = p.mut(layerId);
         auto dup = std::make_shared<Drawing>(*old);
         dup->id = p.nextId;
+        dup->touch();
         p.nextId += 1;
         for (int i = currentFrame; i < frameCount(); ++i) {
             auto c = l->cels.find(frameIds[static_cast<size_t>(i)]);
@@ -254,6 +269,7 @@ public:
         for (const auto& kv : src.drawings) {
             auto nd = std::make_shared<Drawing>(*kv.second);
             nd->id = idMap[kv.first];
+            nd->touch();
             d.drawings[nd->id] = nd;
         }
         for (const auto& kv : src.cels) d.cels[kv.first] = idMap[kv.second];
@@ -288,6 +304,79 @@ public:
         Project p = *this;
         p.layers.erase(std::remove_if(p.layers.begin(), p.layers.end(), [&](const Layer& l) { return l.id == layerId; }),
                        p.layers.end());
+        return p;
+    }
+
+    /** Move uma camada [delta] posições na pilha (positivo = para cima). */
+    Project moveLayer(int64_t layerId, int delta) const {
+        size_t i = 0;
+        while (i < layers.size() && layers[i].id != layerId) ++i;
+        if (i == layers.size()) return *this;
+        const long last = static_cast<long>(layers.size()) - 1;
+        const long j = std::min(std::max(static_cast<long>(i) + delta, 0L), last);
+        if (j == static_cast<long>(i)) return *this;
+        Project p = *this;
+        Layer l = p.layers[i];
+        p.layers.erase(p.layers.begin() + static_cast<std::ptrdiff_t>(i));
+        p.layers.insert(p.layers.begin() + static_cast<std::ptrdiff_t>(j), std::move(l));
+        return p;
+    }
+
+    /** Substitui os traços do desenho do frame atual de uma camada (laço, balde, apagar elementos). Mantém o id. */
+    Project setCurrentStrokes(int64_t layerId, const std::vector<Stroke>& strokes) const {
+        const Layer* src = layer(layerId);
+        if (src == nullptr) return *this;
+        DrawingPtr d = src->drawingAt(currentFrameId());
+        if (!d) return *this;
+        Project p = *this;
+        Layer* l = p.mut(layerId);
+        auto nd = std::make_shared<Drawing>(*d);
+        nd->strokes = strokes;
+        nd->touch();
+        l->drawings[nd->id] = nd;
+        return p;
+    }
+
+    /**
+     * Insere um frame na posição [position] (0 = antes do primeiro, frameCount = depois do último) e seleciona-o.
+     * Camadas de desenho recebem o conteúdo de [content] (cópia independente); cenários continuam o desenho do frame
+     * vizinho anterior (ou do primeiro, se inserido no início).
+     */
+    Project insertFrameAt(int position, const std::map<int64_t, std::vector<Stroke>>& content) const {
+        Project p = *this;
+        const int pos = std::min(std::max(position, 0), frameCount());
+        const int64_t newId = nextId;
+        int64_t counter = nextId + 1;
+        const int nb = std::min(std::max(pos - 1, 0), frameCount() - 1);
+        const int64_t neighbor = frameIds[static_cast<size_t>(nb)];
+        for (Layer& l : p.layers) {
+            if (l.kind == LayerKind::Scenery) {
+                auto c = l.cels.find(neighbor);
+                if (c != l.cels.end()) l.cels[newId] = c->second;
+            } else {
+                auto it = content.find(l.id);
+                if (it == content.end() || it->second.empty()) continue;
+                auto d = std::make_shared<Drawing>();
+                d->id = counter++;
+                d->strokes = it->second;
+                d->touch();
+                l.drawings[d->id] = d;
+                l.cels[newId] = d->id;
+            }
+        }
+        p.frameIds.insert(p.frameIds.begin() + pos, newId);
+        p.currentFrame = pos;
+        p.nextId = counter;
+        return p;
+    }
+
+    /** Projeto montado a partir de peças (leitura de ficheiros): sem validações além das de limites. */
+    static Project assemble(std::vector<int64_t> frameIds, std::vector<Layer> layers, int currentFrame, int64_t nextId) {
+        Project p;
+        p.frameIds = std::move(frameIds);
+        p.layers = std::move(layers);
+        p.currentFrame = p.frameIds.empty() ? 0 : std::min(std::max(currentFrame, 0), static_cast<int>(p.frameIds.size()) - 1);
+        p.nextId = nextId;
         return p;
     }
 
