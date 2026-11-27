@@ -1,5 +1,5 @@
 // Testes do modelo C++ (espelham ProjectTest.kt e TimelineTest.kt). Compilar e correr:
-//   g++ -std=c++17 -O1 -I.. studio_project_test.cpp -o t && ./t
+//   g++ -std=c++17 -O1 studio_project_test.cpp -o t && ./t
 #include <cstdio>
 #include <cstdlib>
 
@@ -142,6 +142,73 @@ int main() {
             idx = s.index; dir = s.direction; seen.push_back(idx);
         }
         CHECK((seen == std::vector<int>{0, 1, 2, 1, 0, 1, 2}));
+    }
+    {  // moveLayer: limita ao intervalo e devolve o mesmo quando nada muda
+        Project p = Project::initial().addLayer(LayerKind::Drawing);
+        const auto bottom = p.layers.front().id;
+        Project up = p.moveLayer(bottom, 1);
+        CHECK(up.layers[1].id == bottom);
+        CHECK(p.moveLayer(bottom, -5).layers.front().id == bottom);
+        CHECK(p.moveLayer(999, 1).layers.size() == 3);
+        CHECK(p.moveLayer(bottom, 100).layers.back().id == bottom);
+    }
+    {  // setCurrentStrokes mantém o id do desenho e muda o serial; o resto continua igual
+        Project p = Project::initial();
+        const auto dl = drawing(p);
+        p = p.addStroke(dl, s1).addStroke(dl, s2);
+        const auto before = p.layer(dl)->drawingAt(p.currentFrameId());
+        Project q = p.setCurrentStrokes(dl, {s2});
+        const auto after = q.layer(dl)->drawingAt(q.currentFrameId());
+        CHECK(after->id == before->id && after->serial != before->serial);
+        CHECK(q.strokesAt(dl, 0) == V{s2});
+        CHECK(p.layer(dl)->drawingAt(p.currentFrameId())->serial == before->serial);
+        CHECK(p.setCurrentStrokes(999, {}).layers.size() == 2);
+    }
+    {  // insertFrameAt: cenário continua o vizinho; camadas de desenho recebem o conteúdo
+        Project p = Project::initial();
+        const auto sc = scenery(p), dl = drawing(p);
+        p = p.addStroke(sc, s1).addFrameAfterCurrent().addFrameAfterCurrent();
+        std::map<int64_t, std::vector<Stroke>> content{{dl, {s2}}};
+        Project q = p.insertFrameAt(1, content);
+        CHECK(q.frameCount() == 4 && q.currentFrame == 1);
+        CHECK(q.strokesAt(sc, 1) == V{s1});
+        CHECK(q.strokesAt(dl, 1) == V{s2});
+        CHECK(q.strokesAt(dl, 0).empty() && q.strokesAt(dl, 2).empty());
+        Project z = p.insertFrameAt(-4, {});
+        CHECK(z.currentFrame == 0 && z.strokesAt(sc, 0) == V{s1});
+    }
+    {  // fichas: mesma ficha enquanto viva; liberta-se quando a última cópia desaparece
+        TokenTable& tt = TokenTable::instance();
+        tt.drain();
+        Stroke a = S(0, 0, 0xFF000000u, 4);
+        a.token = tt.acquire(0, 7001);
+        Project p = Project::initial();
+        const auto dl = drawing(p);
+        Project q = p.addStroke(dl, a);
+        {
+            Stroke b = S(1, 1, 0xFF000000u, 4);
+            b.token = tt.acquire(0, 7001);
+            CHECK(b.token == a.token);
+        }
+        a.token.reset();
+        CHECK(tt.drain().empty());          // o projeto ainda guarda a ficha
+        const int64_t serialNow = q.layer(dl)->drawingAt(q.currentFrameId())->serial;
+        q = Project::initial();             // deixa cair a versão com o traço
+        p = Project::initial();
+        auto rel = tt.drain();
+        bool strokeReleased = false, serialReleased = false;
+        for (auto& kv : rel) {
+            if (kv.first == 0 && kv.second == 7001) strokeReleased = true;
+            if (kv.first == 1 && kv.second == serialNow) serialReleased = true;
+        }
+        CHECK(strokeReleased && serialReleased);
+        // recriada antes de esvaziar a fila: continua viva
+        auto t1 = tt.acquire(0, 7002);
+        t1.reset();
+        auto t2 = tt.acquire(0, 7002);
+        CHECK(tt.drain().empty());
+        t2.reset();
+        CHECK(tt.drain().size() == 1);
     }
     std::printf(g_fail ? "%d falhas\n" : "tudo certo\n", g_fail);
     return g_fail ? 1 : 0;
