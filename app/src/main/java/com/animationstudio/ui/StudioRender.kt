@@ -20,7 +20,7 @@ internal object StudioRender {
 
     private var warmed = false
 
-    /** Gera as texturas em segundo plano, uma são vez por arranque da app. */
+    /** Gera as texturas em segundo plano, uma só vez por arranque da app. */
     @Synchronized fun warmUp() {
         if (warmed) return
         warmed = true
