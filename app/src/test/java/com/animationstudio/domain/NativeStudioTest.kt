@@ -82,4 +82,16 @@ class NativeStudioTest {
         assertEquals(src.layers.map { it.name }, copy.layers.map { it.name })
         assertSame(src.strokesAt(2L, 0)[0], copy.strokesAt(2L, 0)[0])
     }
+
+    @Test fun bucketDoesNotLeakThroughAHairlineAndFillsUnderTheLine() {
+        // Folha 60x40 transparente com uma linha vertical muito leve (alfa 3/255) na coluna 30.
+        val w = 60
+        val h = 40
+        val img = IntArray(w * h)
+        for (y in 0 until h) img[y * w + 30] = (3 shl 24)
+        val m = NativeStudio.nComputeFill(img, w, h, 10, 20, 0, 8, 0, 24)!!
+        assertEquals(1, m[20 * w + 10].toInt())
+        assertEquals(1, m[20 * w + 30].toInt())   // debaixo da linha também há cor (sem vão)
+        assertEquals(0, m[20 * w + 50].toInt())   // do outro lado não passa
+    }
 }

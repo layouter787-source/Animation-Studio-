@@ -66,7 +66,8 @@ class FrameHoldTest {
     @Test fun ropeStabilizerWithZeroStrengthIsTransparent() {
         val s = StrokeStabilizer(0f)
         assertEquals(Point(1f, 2f), s.start(Point(1f, 2f), 0L))
-        assertEquals(Point(7f, 9f), s.next(Point(7f, 9f), 5L))
-        assertEquals(listOf(Point(3f, 3f)), s.finish(Point(3f, 3f)))
+        // Os pontos levam o tempo desde o início do traço (5 ms), de onde vem a velocidade.
+        assertEquals(Point(7f, 9f, 1f, 5f), s.next(Point(7f, 9f), 5L))
+        assertEquals(listOf(Point(3f, 3f, 1f, 5f)), s.finish(Point(3f, 3f)))
     }
 }
