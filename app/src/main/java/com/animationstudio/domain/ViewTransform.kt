@@ -8,8 +8,10 @@ import kotlin.math.sin
 /**
  * Ponto em coordenadas do projeto (folha) ou do ecrã, conforme o contexto da chamada.
  * [p] é a pressão real da caneta nesse ponto (0 a 1); 1 quando não há pressão registada.
+ * [t] é o instante real do ponto, em milissegundos desde o início do traço (0 quando não se registou): a velocidade do
+ * traço, que decide como as pontas ficam, vem daqui.
  */
-data class Point(val x: Float, val y: Float, val p: Float = 1f)
+data class Point(val x: Float, val y: Float, val p: Float = 1f, val t: Float = 0f)
 
 /**
  * Transformação única da vista: projeto -> ecrã.
@@ -41,7 +43,8 @@ data class ViewTransform(
         val s = sin(rotationRad)
         val dx = p.x - tx
         val dy = p.y - ty
-        return Point((c * dx + s * dy) / scale, (-s * dx + c * dy) / scale)
+        // Mantém a pressão e o instante do ponto (a velocidade do traço vem deles).
+        return p.copy(x = (c * dx + s * dy) / scale, y = (-s * dx + c * dy) / scale)
     }
 
     /** Desloca a vista. Não altera escala, rotação nem qualquer dado artístico. */

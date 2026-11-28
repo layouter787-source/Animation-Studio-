@@ -96,6 +96,12 @@ object ProjectJson {
             for (pt in s.points) qs.put(Math.round(pt.p.toDouble() * 1000.0) / 1000.0)
             so.put("q", qs)
         }
+        // Instante de cada ponto (ms desde o início do traço): decide a velocidade e, com ela, as pontas. Só se há tempos.
+        if (s.points.any { it.t != 0f }) {
+            val ts = JSONArray()
+            for (pt in s.points) ts.put(Math.round(pt.t.toDouble() * 10.0) / 10.0)
+            so.put("tm", ts)
+        }
         val f = s.fill
         if (f != null) {
             val fo = JSONObject()
@@ -131,9 +137,11 @@ object ProjectJson {
     private fun decodeStroke(so: JSONObject): BrushStroke {
         val pa = so.getJSONArray("p")
         val qa = if (so.has("q")) so.getJSONArray("q") else null
+        val ta = if (so.has("tm")) so.getJSONArray("tm") else null
         val pts = List(pa.length() / 2) { k ->
             val pr = if (qa != null && k < qa.length()) qa.getDouble(k).toFloat() else 1f
-            Point(pa.getDouble(2 * k).toFloat(), pa.getDouble(2 * k + 1).toFloat(), pr)
+            val tm = if (ta != null && k < ta.length()) ta.getDouble(k).toFloat() else 0f
+            Point(pa.getDouble(2 * k).toFloat(), pa.getDouble(2 * k + 1).toFloat(), pr, tm)
         }
         var fill: FillRegion? = null
         if (so.has("f")) {

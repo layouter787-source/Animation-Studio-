@@ -8,7 +8,7 @@ internal class Prefs(context: Context) {
     private val sp = context.getSharedPreferences("studio", Context.MODE_PRIVATE)
 
     init {
-        StudioRender.taperEnds = sp.getBoolean("taperEnds", false)
+        StudioRender.taperEnds = sp.getBoolean("taperEnds", true)
         StudioRender.pixelated = sp.getBoolean("pixelated", false)
         // Chave nova: o limiar antigo (35%) deixava passar o balde por linhas finas e leves.
         StudioRender.inkPercent = sp.getInt("inkPercent2", 8).coerceIn(0, 100)
@@ -48,7 +48,7 @@ internal class Prefs(context: Context) {
 
     /** Pontas afinadas nos novos traços (por defeito desligado: traço uniforme). */
     var taperEnds: Boolean
-        get() = sp.getBoolean("taperEnds", false)
+        get() = sp.getBoolean("taperEnds", true)
         set(v) { sp.edit().putBoolean("taperEnds", v).apply(); StudioRender.taperEnds = v }
 
     /** Traço pixelado, sem anti-aliasing (por defeito desligado). */
