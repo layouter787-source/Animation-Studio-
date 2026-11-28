@@ -37,7 +37,7 @@ struct Params {
     float endTaper = 1.f;          // 0..1: tamanho da ponta do fim (0 = sem ponta)
     float taperSize = 1.f;         // 0..1: quanto as pontas afinam (1 = até ao mínimo)
     float taperMs = 100.f;         // tempo que a ponta mede quando o parâmetro de ponta vale 1
-    float smooth = 0.5f;           // 0..1: alisamento da linha central
+    float smooth = 0.5f;           // 0..1: alisamento da linha central (0,5 = filtro gaussiano de ~2*(1,2+0,3*largura) px de largura)
     float scale = 1.f;             // píxeis de ecrã por unidade do projeto (só para o passo da amostragem)
 };
 
@@ -68,6 +68,15 @@ inline V catmull(V p0, V p1, V p2, V p3, float t) {
 inline float smoothstep(float x) {
     x = std::min(1.f, std::max(0.f, x));
     return x * x * (3.f - 2.f * x);
+}
+
+/**
+ * Perfil da ponta: 0 na extremidade, 1 no corpo. Seno de quarto de onda: sai da ponta como um cone fino e entra no corpo com
+ * inclinação zero (sem canto), como a ponta de um pincel de tinta; o smoothstep antigo deixava a ponta um fio muito comprido.
+ */
+inline float tipProfile(float u) {
+    u = std::min(1.f, std::max(0.f, u));
+    return std::sin(u * kPi * 0.5f);
 }
 
 /** Valor de uma função tabelada (xs crescente) em [at], por interpolação linear. */
@@ -156,12 +165,43 @@ inline std::vector<float> outline(const std::vector<Sample>& input, const Params
     }
     const size_t N = c.size();
 
-    // 3. Alisamento leve ([1 2 1]/4, extremos fixos): tira o tremor sem encolher a curva.
-    const int passes = static_cast<int>(std::lround(std::min(1.f, std::max(0.f, P.smooth)) * 4.f));
-    for (int pass = 0; pass < passes && N > 2; ++pass) {
-        std::vector<V> d = c;
-        for (size_t i = 1; i + 1 < N; ++i) d[i] = {(c[i - 1].x + 2 * c[i].x + c[i + 1].x) * 0.25f, (c[i - 1].y + 2 * c[i].y + c[i + 1].y) * 0.25f};
-        c.swap(d);
+    // 3. Alisamento gaussiano por comprimento de arco: tira o tremor da mão (o ruído do ecrã tátil) e deixa a linha com
+    //    curvatura contínua. A largura do filtro cresce com a espessura (um traço grosso perdoa mais) e as pontas ficam
+    //    fixas (reflexão ímpar), por isso a curva não encolhe nos extremos.
+    {
+        float arcRaw = 0.f;
+        for (size_t i = 1; i < N; ++i) arcRaw += len(c[i - 1], c[i]);
+        const float ds = N > 1 ? arcRaw / static_cast<float>(N - 1) : 1.f;
+        float sigma = std::min(1.f, std::max(0.f, P.smooth)) * 2.f * (1.2f + 0.3f * P.width);
+        sigma = std::min(sigma, std::min(10.f, arcRaw / 8.f));
+        const int rad = static_cast<int>(std::ceil(3.f * sigma / std::max(ds, 1e-3f)));
+        if (sigma > 0.05f && rad >= 1 && N > 2) {
+            std::vector<float> w(static_cast<size_t>(rad) + 1);
+            float sum = 0.f;
+            for (int k = 0; k <= rad; ++k) {
+                const float d = static_cast<float>(k) * ds / sigma;
+                w[static_cast<size_t>(k)] = std::exp(-0.5f * d * d);
+                sum += (k == 0 ? 1.f : 2.f) * w[static_cast<size_t>(k)];
+            }
+            auto at = [&](long j) -> V {
+                const long last = static_cast<long>(N) - 1;
+                if (j < 0) { const long m = std::min(-j, last); return {2 * c[0].x - c[static_cast<size_t>(m)].x, 2 * c[0].y - c[static_cast<size_t>(m)].y}; }
+                if (j > last) { const long m = std::max(0L, 2 * last - j); return {2 * c[static_cast<size_t>(last)].x - c[static_cast<size_t>(m)].x, 2 * c[static_cast<size_t>(last)].y - c[static_cast<size_t>(m)].y}; }
+                return c[static_cast<size_t>(j)];
+            };
+            std::vector<V> d = c;
+            for (size_t i = 1; i + 1 < N; ++i) {
+                float ax = 0.f, ay = 0.f;
+                for (int k = -rad; k <= rad; ++k) {
+                    const V q = at(static_cast<long>(i) + k);
+                    const float wk = w[static_cast<size_t>(std::abs(k))];
+                    ax += q.x * wk;
+                    ay += q.y * wk;
+                }
+                d[i] = {ax / sum, ay / sum};
+            }
+            c.swap(d);
+        }
     }
 
     // 4. Arco real, tempo e pressão em cada ponto.
@@ -193,8 +233,10 @@ inline std::vector<float> outline(const std::vector<Sample>& input, const Params
     float startLen = 0.f, endLen = 0.f;
     if (P.startTaper > 0.f) startLen = std::max(minLen, arcAtTime(t0 + P.taperMs * P.startTaper) - 0.f);
     if (P.endTaper > 0.f) endLen = std::max(minLen, total - arcAtTime(t1 - P.taperMs * P.endTaper));
-    // As duas pontas nunca passam de metade do traço cada uma.
-    const float cap = total * 0.5f;
+    // Uma ponta nunca é mais comprida do que ~8 espessuras (um traço muito rápido dava um "fio" que ocupava o traço todo,
+    // com ar de folha) nem do que 40% do traço.
+    const float lenCap = std::max(8.f * P.width, 24.f);
+    const float cap = std::min(lenCap, total * 0.4f);
     startLen = std::min(startLen, cap);
     endLen = std::min(endLen, cap);
 
@@ -214,9 +256,9 @@ inline std::vector<float> outline(const std::vector<Sample>& input, const Params
             f *= 1.f - P.speedWidth * std::sqrt(v) * (1.f - minR / R);
         }
         float tipK = 1.f;
-        if (startLen > 0.f && arc[i] < startLen) tipK = std::min(tipK, 1.f - size * (1.f - smoothstep(arc[i] / startLen)));
+        if (startLen > 0.f && arc[i] < startLen) tipK = std::min(tipK, 1.f - size * (1.f - tipProfile(arc[i] / startLen)));
         const float dEnd = total - arc[i];
-        if (endLen > 0.f && dEnd < endLen) tipK = std::min(tipK, 1.f - size * (1.f - smoothstep(dEnd / endLen)));
+        if (endLen > 0.f && dEnd < endLen) tipK = std::min(tipK, 1.f - size * (1.f - tipProfile(dEnd / endLen)));
         r[i] = std::max(minR, R * f * tipK);
     }
     // Um alisamento do raio tira degraus (pressão e velocidade).
