@@ -68,4 +68,17 @@ object NativeStudio {
 
     /** [índice, direção, terminou (0/1)]. Modo: 0 uma vez, 1 loop, 2 ping-pong. */
     @JvmStatic external fun nNextPlaybackStep(index: Int, count: Int, mode: Int, direction: Int): IntArray
+
+    /** Balde: máscara w*h (1 = preencher) a partir do toque, ou null se não há onde preencher (ver studio_fill.hpp). */
+    @JvmStatic external fun nComputeFill(
+        argb: IntArray, w: Int, h: Int, sx: Int, sy: Int, inkAlpha: Int, colorTol: Int, gapCells: Int, growCap: Int,
+    ): ByteArray?
+
+    /** Polígonos do traço de tinta: [n, x0, y0, ...]* (ver studio_ink.hpp). */
+    @JvmStatic external fun nInkOutline(xy: FloatArray, pressure: FloatArray, timeMs: FloatArray, params: FloatArray): FloatArray
+
+    /** Corda de suavização: estado [x, y, direção x, direção y], atualizado no lugar. */
+    @JvmStatic external fun nRopeStart(state: FloatArray, x: Float, y: Float)
+    @JvmStatic external fun nRopeNext(state: FloatArray, x: Float, y: Float, ropePx: Float)
+    @JvmStatic external fun nRopeFinish(state: FloatArray, x: Float, y: Float, ropePx: Float): FloatArray
 }

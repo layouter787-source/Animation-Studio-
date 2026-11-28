@@ -35,14 +35,16 @@ object StrokeSmoothing {
             var sy = 0f
             var sw = 0f
             var sp = 0f
+            var st = 0f
             for (j in -r..r) {
                 val w = (r + 1 - kotlin.math.abs(j)).toFloat()
                 sx += p[i + j].x * w
                 sy += p[i + j].y * w
                 sp += p[i + j].p * w
+                st += p[i + j].t * w
                 sw += w
             }
-            out.add(Point(sx / sw, sy / sw, sp / sw))
+            out.add(Point(sx / sw, sy / sw, sp / sw, st / sw))
         }
         return out
     }
@@ -53,8 +55,8 @@ object StrokeSmoothing {
         for (i in 0 until p.size - 1) {
             val a = p[i]
             val b = p[i + 1]
-            out.add(Point(a.x * 0.75f + b.x * 0.25f, a.y * 0.75f + b.y * 0.25f, a.p * 0.75f + b.p * 0.25f))
-            out.add(Point(a.x * 0.25f + b.x * 0.75f, a.y * 0.25f + b.y * 0.75f, a.p * 0.25f + b.p * 0.75f))
+            out.add(Point(a.x * 0.75f + b.x * 0.25f, a.y * 0.75f + b.y * 0.25f, a.p * 0.75f + b.p * 0.25f, a.t * 0.75f + b.t * 0.25f))
+            out.add(Point(a.x * 0.25f + b.x * 0.75f, a.y * 0.25f + b.y * 0.75f, a.p * 0.25f + b.p * 0.75f, a.t * 0.25f + b.t * 0.75f))
         }
         out.add(p.last())
         return out
