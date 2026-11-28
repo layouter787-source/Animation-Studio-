@@ -11,7 +11,9 @@
 #include <unordered_map>
 #include <vector>
 
+#include "studio_fill.hpp"
 #include "studio_hold.hpp"
+#include "studio_ink.hpp"
 #include "studio_project.hpp"
 
 namespace {
@@ -281,4 +283,67 @@ FN(jintArray, nNextPlaybackStep)(JNIEnv* env, jclass, jint index, jint count, ji
     jintArray a = env->NewIntArray(3);
     env->SetIntArrayRegion(a, 0, 3, v);
     return a;
+}
+
+// ---- balde de tinta: máscara (w*h bytes, 1 = preencher) ou nulo se não há onde preencher ----
+FN(jbyteArray, nComputeFill)(JNIEnv* env, jclass, jintArray argb, jint w, jint h, jint sx, jint sy, jint inkAlpha, jint colorTol,
+                             jint gapCells, jint growCap) {
+    if (argb == nullptr || w <= 0 || h <= 0 || env->GetArrayLength(argb) < w * h) return nullptr;
+    std::vector<jint> px(static_cast<size_t>(w) * h);
+    env->GetIntArrayRegion(argb, 0, w * h, px.data());
+    studio::FillParams P;
+    P.inkAlpha = inkAlpha;
+    P.colorTolerance = colorTol;
+    P.userGapCells = gapCells;
+    P.growCap = growCap;
+    const std::vector<uint8_t> m = studio::computeFill(reinterpret_cast<const uint32_t*>(px.data()), w, h, sx, sy, P);
+    if (m.empty()) return nullptr;
+    jbyteArray out = env->NewByteArray(static_cast<jsize>(m.size()));
+    env->SetByteArrayRegion(out, 0, static_cast<jsize>(m.size()), reinterpret_cast<const jbyte*>(m.data()));
+    return out;
+}
+
+// ---- traço de tinta: contorno com pontas por velocidade, e a corda ----
+/**
+ * Polígonos do traço (ver studio_ink.hpp): [n, x0, y0, ...]* ou vazio. [xy]: pares x,y; [pr]: pressão; [tm]: ms.
+ * [params]: largura, fração mínima, pressão, velocidade, ponta inicial, ponta final, tamanho das pontas, ms da ponta, alisamento, escala.
+ */
+FN(jfloatArray, nInkOutline)(JNIEnv* env, jclass, jfloatArray xy, jfloatArray pr, jfloatArray tm, jfloatArray params) {
+    const jsize n = xy ? env->GetArrayLength(xy) / 2 : 0;
+    std::vector<jfloat> a(static_cast<size_t>(n) * 2), p(static_cast<size_t>(n), 1.f), t(static_cast<size_t>(n), 0.f), q(10, 0.f);
+    if (n > 0) env->GetFloatArrayRegion(xy, 0, n * 2, a.data());
+    if (pr && env->GetArrayLength(pr) >= n && n > 0) env->GetFloatArrayRegion(pr, 0, n, p.data());
+    if (tm && env->GetArrayLength(tm) >= n && n > 0) env->GetFloatArrayRegion(tm, 0, n, t.data());
+    if (params && env->GetArrayLength(params) >= 10) env->GetFloatArrayRegion(params, 0, 10, q.data());
+    std::vector<studio::ink::Sample> s(static_cast<size_t>(n));
+    for (jsize i = 0; i < n; ++i) s[static_cast<size_t>(i)] = {a[2 * i], a[2 * i + 1], p[i], t[i]};
+    studio::ink::Params P;
+    P.width = q[0]; P.minWidthFraction = q[1]; P.pressureWidth = q[2]; P.speedWidth = q[3];
+    P.startTaper = q[4]; P.endTaper = q[5]; P.taperSize = q[6]; P.taperMs = q[7]; P.smooth = q[8]; P.scale = q[9];
+    const std::vector<float> o = studio::ink::outline(s, P);
+    jfloatArray r = env->NewFloatArray(static_cast<jsize>(o.size()));
+    if (!o.empty()) env->SetFloatArrayRegion(r, 0, static_cast<jsize>(o.size()), o.data());
+    return r;
+}
+
+/** Corda: [state] = [x, y, direção x, direção y]; atualiza-o no lugar. */
+FN(void, nRopeStart)(JNIEnv* env, jclass, jfloatArray state, jfloat x, jfloat y) {
+    float st[4];
+    studio::ink::rope::start(st, x, y);
+    env->SetFloatArrayRegion(state, 0, 4, st);
+}
+FN(void, nRopeNext)(JNIEnv* env, jclass, jfloatArray state, jfloat x, jfloat y, jfloat ropePx) {
+    float st[4];
+    env->GetFloatArrayRegion(state, 0, 4, st);
+    studio::ink::rope::next(st, x, y, ropePx);
+    env->SetFloatArrayRegion(state, 0, 4, st);
+}
+FN(jfloatArray, nRopeFinish)(JNIEnv* env, jclass, jfloatArray state, jfloat x, jfloat y, jfloat ropePx) {
+    float st[4];
+    env->GetFloatArrayRegion(state, 0, 4, st);
+    const std::vector<float> o = studio::ink::rope::finish(st, x, y, ropePx);
+    env->SetFloatArrayRegion(state, 0, 4, st);
+    jfloatArray r = env->NewFloatArray(static_cast<jsize>(o.size()));
+    if (!o.empty()) env->SetFloatArrayRegion(r, 0, static_cast<jsize>(o.size()), o.data());
+    return r;
 }
