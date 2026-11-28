@@ -46,6 +46,7 @@ import com.animationstudio.domain.Project
 import com.animationstudio.domain.Stamp
 import com.animationstudio.domain.StampGeometry
 import com.animationstudio.domain.StampShape
+import com.animationstudio.domain.InkOutline
 import com.animationstudio.domain.StrokeGeometry
 import com.animationstudio.domain.bounds
 import java.util.concurrent.ConcurrentHashMap
@@ -238,29 +239,54 @@ private fun polyline(pts: List<Point>): Path {
     return p
 }
 
+/** Caminho (preencher com a regra não-zero) do contorno do traço, ou null se o motor nativo não está disponível. */
+private fun inkPolygons(pts: List<Point>, width: Float, taper: Float): Path? {
+    val f = try {
+        InkOutline.polygons(pts, width, taper)
+    } catch (e: UnsatisfiedLinkError) {
+        return null
+    }
+    if (f.isEmpty()) return null
+    val path = Path()
+    var k = 0
+    while (k < f.size) {
+        val n = f[k].toInt()
+        if (n < 3 || k + 1 + 2 * n > f.size) break
+        path.moveTo(f[k + 1], f[k + 2])
+        for (j in 1 until n) path.lineTo(f[k + 1 + 2 * j], f[k + 2 + 2 * j])
+        path.close()
+        k += 1 + 2 * n
+    }
+    return path
+}
+
 private fun buildPass(s: BrushStroke, width: Float, alpha: Float): InkPass {
     val pts = s.points
     if (pts.size == 1) return InkPass(width, alpha, null, emptyList(), listOf(Offset(pts[0].x, pts[0].y) to width / 2f))
-    // Espessura uniforme e pontas redondas. Só afina as pontas se o utilizador ativar essa opção.
+    // Contorno calculado no C++ (InkOutline): espessura cheia, juntas redondas e, com as pontas afinadas ligadas, pontas que
+    // dependem da velocidade do traço (rápido = ponta longa e fina; lento = ponta curta e mais grossa).
+    val taper = if (StudioRender.taperEnds) (s.taper / 0.6f).coerceIn(0f, 1.5f) else 0f
+    val polys = inkPolygons(pts, width, taper)
+    if (polys != null) return InkPass(width, alpha, null, listOf(polys), emptyList())
     val shape = StrokeGeometry.buildNatural(pts, width, if (StudioRender.taperEnds) s.taper else 0f)
     var body: Path? = null
     if (shape.body.size >= 2) body = polyline(shape.body)
-    val polys = ArrayList<Path>()
+    val ribbons = ArrayList<Path>()
     val tips = ArrayList<Pair<Offset, Float>>()
     val st = shape.start
     if (st != null) {
-        polys.add(polyPath(st.polygon))
+        ribbons.add(polyPath(st.polygon))
         tips.add(Offset(st.tip.x, st.tip.y) to st.tipRadius)
     }
     val en = shape.end
     if (en != null) {
-        polys.add(polyPath(en.polygon))
+        ribbons.add(polyPath(en.polygon))
         tips.add(Offset(en.tip.x, en.tip.y) to en.tipRadius)
     }
-    if (body == null && polys.isEmpty() && shape.body.isNotEmpty()) {
+    if (body == null && ribbons.isEmpty() && shape.body.isNotEmpty()) {
         tips.add(Offset(shape.body[0].x, shape.body[0].y) to width / 2f)
     }
-    return InkPass(width, alpha, body, polys, tips)
+    return InkPass(width, alpha, body, ribbons, tips)
 }
 
 /**
